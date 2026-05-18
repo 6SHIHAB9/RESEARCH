@@ -7,7 +7,7 @@ from llm.batch_prompt import run_tick_batch
 
 logger = logging.getLogger(__name__)
 
-TICK_INTERVAL_SECONDS = 45       # seconds between ticks
+TICK_INTERVAL_SECONDS = 15       # seconds between ticks
 ACTIVE_HOURS_PER_DAY = 20        # hours civilization is "awake"
 SLEEP_HOURS_PER_DAY = 4
 DAY_SECONDS = (ACTIVE_HOURS_PER_DAY + SLEEP_HOURS_PER_DAY) * 3600

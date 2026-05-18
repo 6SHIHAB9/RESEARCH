@@ -20,9 +20,16 @@ class Resource:
     max_amount: int = 10
     claimed_by: str = None   # agent_id or None
 
+    replenish_every: int = 8   # ticks between each +1 unit
+    _replenish_counter: int = 0
+
     def replenish(self):
+        """Only add 1 unit every replenish_every ticks, not every tick."""
         if self.amount < self.max_amount:
-            self.amount = min(self.max_amount, self.amount + 1)
+            self._replenish_counter += 1
+            if self._replenish_counter >= self.replenish_every:
+                self.amount = min(self.max_amount, self.amount + 1)
+                self._replenish_counter = 0
 
 
 @dataclass
@@ -48,12 +55,13 @@ class World:
         ]
 
         # World resources that agents compete / cooperate over
+        # Low amounts + slow replenish = real scarcity and competition
         self.resources: list[Resource] = [
-            Resource("Fishing Spot", 28, 72, "food", amount=8, max_amount=8),
-            Resource("Berry Grove", 55, 45, "food", amount=10, max_amount=10),
-            Resource("Cave Shelter", 18, 22, "shelter", amount=5, max_amount=5),
-            Resource("Tool Cache", 72, 28, "tools", amount=4, max_amount=4),
-            Resource("High Ground", 80, 80, "territory", amount=3, max_amount=3),
+            Resource("Fishing Spot", 28, 72, "food",      amount=4, max_amount=6,  replenish_every=10),
+            Resource("Berry Grove",  55, 45, "food",      amount=5, max_amount=8,  replenish_every=8),
+            Resource("Cave Shelter", 18, 22, "shelter",   amount=3, max_amount=3,  replenish_every=20),
+            Resource("Tool Cache",   72, 28, "tools",     amount=2, max_amount=4,  replenish_every=15),
+            Resource("High Ground",  80, 80, "territory", amount=2, max_amount=2,  replenish_every=25),
         ]
 
         self._initialize_agents()
@@ -100,8 +108,14 @@ class World:
 
     def tick_resources(self):
         """Replenish resources and expire stale claims."""
+        import logging
+        logger = logging.getLogger(__name__)
         for res in self.resources:
+            was_empty = res.amount == 0
             res.replenish()
+            if res.amount == 0 and not was_empty:
+                logger.info(f"  💀 {res.name} is fully depleted!")
+                self.log_event({"type": "resource_depleted", "resource": res.name})
             # Claim expires if claimant drifted far away
             if res.claimed_by:
                 agent = self.agents.get(res.claimed_by)
