@@ -33,3 +33,7 @@ build/
 
 # Cache
 .cache/
+
+# Python cache
+__pycache__/
+*.pyc
