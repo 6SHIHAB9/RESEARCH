@@ -1,13 +1,29 @@
 import random
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from agents.agent import Agent
 from agents.names import AGENT_NAMES, PERSONALITIES
 
 WORLD_WIDTH = 100
 WORLD_HEIGHT = 100
-PERCEPTION_RADIUS = 12  # Tightened from 18 to reduce spatial spread and increase recurring encounters
+PERCEPTION_RADIUS = 12
 INITIAL_AGENT_COUNT = 25
+
+
+@dataclass
+class Resource:
+    name: str
+    x: float
+    y: float
+    kind: str        # "food", "shelter", "tools", "territory"
+    amount: int = 10
+    max_amount: int = 10
+    claimed_by: str = None   # agent_id or None
+
+    def replenish(self):
+        if self.amount < self.max_amount:
+            self.amount = min(self.max_amount, self.amount + 1)
+
 
 @dataclass
 class Landmark:
@@ -16,21 +32,30 @@ class Landmark:
     y: float
     kind: str
 
+
 class World:
     def __init__(self):
         self.tick_number = 0
         self.created_at = time.time()
         self.agents: dict[str, Agent] = {}
         self.event_log: list[dict] = []
-        
-        # 1. LANDMARK SYSTEM: Permanent geography
+
         self.landmarks = [
             Landmark("Silent Lake", 30, 70, "water"),
             Landmark("Old Firepit", 50, 50, "ruin"),
             Landmark("Hollow Tree", 70, 30, "nature"),
             Landmark("Glass Tower", 20, 20, "structure"),
         ]
-        
+
+        # World resources that agents compete / cooperate over
+        self.resources: list[Resource] = [
+            Resource("Fishing Spot", 28, 72, "food", amount=8, max_amount=8),
+            Resource("Berry Grove", 55, 45, "food", amount=10, max_amount=10),
+            Resource("Cave Shelter", 18, 22, "shelter", amount=5, max_amount=5),
+            Resource("Tool Cache", 72, 28, "tools", amount=4, max_amount=4),
+            Resource("High Ground", 80, 80, "territory", amount=3, max_amount=3),
+        ]
+
         self._initialize_agents()
 
     def _initialize_agents(self):
@@ -48,7 +73,6 @@ class World:
             self.agents[agent.id] = agent
 
     def get_nearby_agents(self, agent: Agent) -> list[Agent]:
-        """Return agents within perception radius, excluding self."""
         nearby = []
         for other in self.agents.values():
             if other.id == agent.id:
@@ -59,7 +83,6 @@ class World:
         return nearby
 
     def get_nearby_landmarks(self, agent: Agent, radius: float = PERCEPTION_RADIUS) -> list[Landmark]:
-        """2. LOCAL LANDMARK PERCEPTION: Return landmarks within perception radius."""
         nearby = []
         for lm in self.landmarks:
             dist = ((agent.x - lm.x) ** 2 + (agent.y - lm.y) ** 2) ** 0.5
@@ -67,16 +90,47 @@ class World:
                 nearby.append(lm)
         return nearby
 
+    def get_nearby_resources(self, agent: Agent, radius: float = PERCEPTION_RADIUS) -> list[Resource]:
+        nearby = []
+        for res in self.resources:
+            dist = ((agent.x - res.x) ** 2 + (agent.y - res.y) ** 2) ** 0.5
+            if dist <= radius:
+                nearby.append(res)
+        return nearby
+
+    def tick_resources(self):
+        """Replenish resources and expire stale claims."""
+        for res in self.resources:
+            res.replenish()
+            # Claim expires if claimant drifted far away
+            if res.claimed_by:
+                agent = self.agents.get(res.claimed_by)
+                if agent:
+                    dist = ((agent.x - res.x) ** 2 + (agent.y - res.y) ** 2) ** 0.5
+                    if dist > PERCEPTION_RADIUS * 1.5:
+                        res.claimed_by = None
+                else:
+                    res.claimed_by = None
+
     def log_event(self, event: dict):
         self.event_log.append({**event, "tick": self.tick_number})
-        if len(self.event_log) > 200:
-            self.event_log = self.event_log[-200:]
+        if len(self.event_log) > 300:
+            self.event_log = self.event_log[-300:]
 
     def to_snapshot(self) -> dict:
         return {
             "tick": self.tick_number,
             "timestamp": time.time(),
             "agents": [a.to_dict() for a in self.agents.values()],
-            "landmarks": [{"name": lm.name, "x": lm.x, "y": lm.y, "kind": lm.kind} for lm in self.landmarks],
+            "landmarks": [{"name": lm.name, "x": lm.x, "y": lm.y, "kind": lm.kind}
+                          for lm in self.landmarks],
+            "resources": [
+                {
+                    "name": r.name, "x": r.x, "y": r.y, "kind": r.kind,
+                    "amount": r.amount, "max_amount": r.max_amount,
+                    "claimed_by": r.claimed_by,
+                }
+                for r in self.resources
+            ],
             "recent_events": self.event_log[-30:],
         }
