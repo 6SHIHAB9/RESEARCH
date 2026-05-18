@@ -3,7 +3,7 @@ import logging
 import random
 import os
 from openai import AsyncOpenAI
-from core.world import World, WORLD_WIDTH, WORLD_HEIGHT
+from core.world import World, WORLD_WIDTH, WORLD_HEIGHT, Landmark
 from agents.agent import Agent
 
 logger = logging.getLogger(__name__)
@@ -16,27 +16,30 @@ def _get_client() -> AsyncOpenAI:
     )
 
 MODEL = "llama3.1-8b"
-MAX_AGENTS_PER_BATCH = 8   # Process up to 8 agent interactions per tick to save tokens
+MAX_AGENTS_PER_BATCH = 8   
 
 
-def _build_agent_context(agent: Agent, nearby: list[Agent]) -> dict:
-    """Build a compact context object for one agent."""
+def _build_agent_context(agent: Agent, nearby: list[Agent], nearby_landmarks: list[Landmark]) -> dict:
+    """Build a compact context object for one agent, including local geography."""
     memory_summary = []
     for m in agent.memory[-3:]:
         memory_summary.append(m.get("summary", ""))
 
     nearby_info = []
-    for other in nearby[:4]:  # max 4 nearby per agent
+    for other in nearby[:4]: 
         bond = agent.social_bonds.get(other.id, 0.0)
         bond_label = "familiar" if bond > 0.3 else ("tense" if bond < -0.2 else "unknown")
         nearby_info.append(f"{other.name} ({other.mood_label()}, {bond_label})")
+
+    landmark_info = [{"name": lm.name, "kind": lm.kind} for lm in nearby_landmarks]
 
     return {
         "id": agent.id,
         "name": agent.name,
         "personality": agent.personality,
         "mood": agent.mood_label(),
-        "nearby": nearby_info,
+        "nearby_agents": nearby_info,
+        "nearby_landmarks": landmark_info,
         "memories": memory_summary,
         "last_action": agent.last_action,
     }
@@ -45,11 +48,11 @@ def _build_agent_context(agent: Agent, nearby: list[Agent]) -> dict:
 def _build_batch_prompt(agent_contexts: list[dict]) -> str:
     agents_json = json.dumps(agent_contexts, indent=2)
 
-    return f"""You are simulating a small group of beings in a persistent world.
+    return f"""You are simulating a small group of beings in a persistent world with local geography.
 Each being simply exists. They have no goals. They are not performing for anyone.
 
 For each being below, decide what happens in this moment.
-Consider their personality, current mood, who is nearby, and their memories.
+Consider their personality, mood, local geography (landmarks), nearby beings, and memories.
 
 Respond ONLY with a valid JSON array. One object per being, same order as input.
 Each object must have exactly these fields:
@@ -59,18 +62,16 @@ Each object must have exactly these fields:
 - "mood_delta": float from -0.3 to 0.3, how this moment shifts their mood
 - "target_id": id of nearby being they interact with (if any), otherwise null
 - "bond_delta": float -0.2 to 0.2, change in bond with target (0 if no target)
-- "move_dx": float -4 to 4, horizontal drift this tick
-- "move_dy": float -4 to 4, vertical drift this tick
+- "move_dx": float -1.5 to 1.5, horizontal drift this tick (smaller movements to prevent spreading)
+- "move_dy": float -1.5 to 1.5, vertical drift this tick
 - "memory_note": one short sentence (under 15 words) to remember, or null
 
 Rules:
-- Most beings should do very little. Silence is normal.
-- Wandering, ignoring, observing are the most common actions.
-- Speech should feel like a real person, not a narrator.
-- Moods shift slowly. Big shifts are rare.
-- Bonds form over repeated contact, not single meetings.
-- Some beings may drift apart. Some may stay near familiar faces.
-- Do not invent drama. Just simulate the moment.
+- Most beings should do very little. Silence and inactivity are normal.
+- Movement Ecology: Movement is stochastic, but beings occasionally drift toward nearby landmarks or familiar agents with stronger social bonds.
+- Gatherings emerge naturally over time through repeated proximity, not forced coordination.
+- Beings only perceive their immediate surroundings. They possess incomplete information.
+- Do not invent drama, excessive dialogue, or assistant-like behavior. The world should feel like an ambient, sparse ecosystem.
 
 Beings:
 {agents_json}
@@ -81,17 +82,15 @@ Respond with ONLY the JSON array. No explanation. No markdown.
 
 async def run_tick_batch(world: World):
     """Run one batched LLM tick for the world."""
-
-    # Select agents to process this tick (not all 25 every time - saves tokens)
     all_agents = list(world.agents.values())
     random.shuffle(all_agents)
     active_agents = all_agents[:MAX_AGENTS_PER_BATCH]
 
-    # Build context for each active agent
     agent_contexts = []
     for agent in active_agents:
         nearby = world.get_nearby_agents(agent)
-        ctx = _build_agent_context(agent, nearby)
+        nearby_landmarks = world.get_nearby_landmarks(agent)
+        ctx = _build_agent_context(agent, nearby, nearby_landmarks)
         agent_contexts.append(ctx)
 
     prompt = _build_batch_prompt(agent_contexts)
@@ -108,28 +107,24 @@ async def run_tick_batch(world: World):
 
     raw = response.choices[0].message.content.strip()
 
-    # Strip markdown fences if present
     if raw.startswith("```"):
         raw = raw.split("```")[1]
         if raw.startswith("json"):
             raw = raw[4:]
         raw = raw.strip()
 
-    # Find the JSON array bounds in case there's extra text
     start = raw.find("[")
     end = raw.rfind("]")
     if start != -1 and end != -1:
         raw = raw[start:end+1]
 
-    # Parse and apply results
     try:
         results = json.loads(raw)
         _apply_results(world, results, active_agents)
     except json.JSONDecodeError as e:
         logger.error(f"  ✗ JSON parse error: {e}")
-        logger.debug(f"  Raw response: {raw[:300]}")
         for agent in active_agents:
-            agent.move(random.uniform(-2, 2), random.uniform(-2, 2))
+            agent.move(random.uniform(-1.5, 1.5), random.uniform(-1.5, 1.5))
             agent.last_action = "wandering"
 
 
@@ -152,6 +147,9 @@ def _apply_results(world: World, results: list[dict], active_agents: list[Agent]
         move_dy = float(result.get("move_dy", random.uniform(-1, 1)))
         memory_note = result.get("memory_note")
 
+        # Capture old coordinates for landmark delta calculation
+        old_x, old_y = agent.x, agent.y
+
         # Apply movement
         agent.move(move_dx, move_dy)
 
@@ -170,7 +168,7 @@ def _apply_results(world: World, results: list[dict], active_agents: list[Agent]
             agent.update_bond(target_id, bond_delta)
             target = world.agents.get(target_id)
             if target:
-                target.update_bond(agent_id, bond_delta * 0.6)  # reciprocal, weaker
+                target.update_bond(agent_id, bond_delta * 0.6)
 
         # Store memory
         if memory_note:
@@ -182,8 +180,26 @@ def _apply_results(world: World, results: list[dict], active_agents: list[Agent]
         agent.last_action = action
         agent.last_interaction_tick = world.tick_number
 
-        # Log significant events
         mood_change = abs(agent.mood - old_mood)
+
+        # ==================================================
+        # 8. LIGHTWEIGHT TERMINAL LOGGING (Ecology & Geography)
+        # ==================================================
+        for lm in world.landmarks:
+            dist = ((agent.x - lm.x)**2 + (agent.y - lm.y)**2)**0.5
+            old_dist = ((old_x - lm.x)**2 + (old_y - lm.y)**2)**0.5
+            
+            if dist <= 5.0 and old_dist > 5.0:
+                logger.info(f"  📍 {agent.name} drifted toward the {lm.name}")
+            elif dist <= 5.0 and action == "linger":
+                logger.info(f"  🏕️  {agent.name} is lingering near the {lm.name}")
+
+        if target_id:
+            target = world.agents.get(target_id)
+            if target and agent.social_bonds.get(target_id, 0.0) > 0.4:
+                logger.info(f"  👥 {agent.name} and {target.name} share a familiar recurring encounter")
+
+        # Standard Logging
         if action == "speak" and phrase:
             logger.info(f"  💬 {agent.name}: \"{phrase}\"")
             world.log_event({
@@ -207,27 +223,12 @@ def _apply_results(world: World, results: list[dict], active_agents: list[Agent]
             t = f" {target.name}" if target else ""
             logger.info(f"  —  {agent.name} ignoring{t}")
         elif action == "linger":
-            logger.info(f"  ·  {agent.name} lingering")
+            pass # Pre-handled by landmark log to prevent double-logging
         elif mood_change > 0.15:
             direction = "↑" if mood_delta > 0 else "↓"
             logger.info(f"  {direction} {agent.name} mood: {old_mood:.2f} → {agent.mood:.2f}")
-            world.log_event({
-                "type": "mood_shift",
-                "agent": agent.name,
-                "agent_id": agent.id,
-                "from": round(old_mood, 2),
-                "to": round(agent.mood, 2),
-            })
 
         if bond_delta > 0.1 and target_id:
             target = world.agents.get(target_id)
             if target:
                 logger.info(f"  🤝 {agent.name} → {target.name} bond: +{bond_delta:.2f}")
-                world.log_event({
-                    "type": "bond_formed",
-                    "agent": agent.name,
-                    "agent_id": agent.id,
-                    "target": target.name,
-                    "target_id": target_id,
-                    "delta": round(bond_delta, 2),
-                })
