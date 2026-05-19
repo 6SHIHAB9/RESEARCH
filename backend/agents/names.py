@@ -7,19 +7,34 @@ AGENT_NAMES = [
 ]
 
 PERSONALITIES = [
+    # Passive / neutral
     "quiet and observant, rarely initiates contact",
     "warm and curious, drawn to others",
-    "restless and unpredictable, moves often",
     "melancholy and slow, lingers in places",
-    "cheerful but forgetful, repeats greetings",
-    "cautious, remembers slights, keeps distance",
-    "talkative, fills silence with small observations",
-    "detached, watches from the edges",
+    "gentle and patient, rarely speaks first",
     "nostalgic, mentions the past in passing",
     "nervous in crowds, calmer when alone",
-    "drawn to familiar faces, wary of strangers",
-    "impulsive, acts on mood",
-    "gentle and patient, rarely speaks first",
-    "cynical but not unkind",
-    "easily affected by others' moods",
+
+    # Social / manipulative
+    "charming but self-serving, forms alliances only when useful",
+    "gossipy and curious, trades information like currency",
+    "deeply loyal to allies, cold and dismissive to everyone else",
+    "persuasive, uses guilt and flattery to get what they want",
+    "friendly on the surface, but tracks every debt and favor",
+
+    # Aggressive / territorial
+    "territorial and possessive, does not share resources willingly",
+    "short-tempered, quick to confront perceived threats or slights",
+    "dominant and calculating, always testing others for weakness",
+    "ruthless when hungry or threatened, civil otherwise",
+
+    # Paranoid / suspicious
+    "deeply suspicious, assumes others have hidden motives",
+    "cautious and resentful, remembers every slight in detail",
+    "distrustful of strangers, warms up only after repeated positive contact",
+
+    # Wildcard
+    "impulsive and unpredictable, acts on raw emotion",
+    "cynical and blunt, says what others only think",
+    "opportunistic, shifts loyalty based on who has resources",
 ]

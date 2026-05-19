@@ -153,62 +153,67 @@ def _build_agent_context(
 
 def _build_batch_prompt(agent_contexts: list[dict]) -> str:
     agents_json = json.dumps(agent_contexts, indent=2)
-
-    # Build the valid IDs list so the LLM knows which target_ids are legal
     valid_ids = [ctx["id"] for ctx in agent_contexts]
     valid_ids_str = ", ".join(f'"{i}"' for i in valid_ids)
 
-    return f"""You are simulating an emergent digital society. Agents are survival-driven,
-emotionally reactive, and socially complex. They form opinions, hold grudges, make alliances,
-compete over resources, and act on their dominant needs.
-
-For each agent below, decide what happens this tick.
+    return f"""You are running a survival simulation. These agents have distinct personalities, unmet needs, and history with each other. Your job is to make each tick feel alive.
 
 Valid actions: speak, observe, wander, ignore, retreat, linger, forage, confront, trade, rest
-Valid agent IDs for target_id: {valid_ids_str}
+Valid target IDs: {valid_ids_str}
 
-Respond ONLY with a valid JSON array — one object per agent, same order as input.
-Each object must have EXACTLY these fields:
-- "id": string — copy exactly from input
-- "action": string — one of the valid actions
-- "phrase": string or null — if speak: max 15 words, emotionally driven. null otherwise.
+Output a JSON array — one object per agent, same order as input. Each object:
+- "id": copy from input
+- "action": one valid action
+- "phrase": if speaking — MAX 12 words, must reflect their personality and emotional state. null otherwise.
 - "mood_delta": float -0.3 to 0.3
-- "target_id": string or null — MUST be one of the valid agent IDs above, or null
+- "target_id": must be a valid ID from the list above, or null
 - "trust_delta": float -0.3 to 0.3
 - "fear_delta": float 0.0 to 0.3
 - "affinity_delta": float -0.3 to 0.3
 - "hostility_delta": float 0.0 to 0.3
 - "dx": float -2.0 to 2.0
 - "dy": float -2.0 to 2.0
-- "memory_note": string or null — one sentence under 15 words naming specific agents
-- "resource_action": string or null — "forage", "claim", or null
-- "resource_target": string or null — exact name of nearby resource
+- "memory_note": one sentence under 12 words naming specific agents, or null
+- "resource_action": "forage", "claim", or null
+- "resource_target": exact resource name or null
 
-CRITICAL JSON RULES:
-- Do NOT use backslashes inside phrase or memory_note strings
-- Do NOT add trailing commas
-- All string values must use straight double quotes only
-- target_id must be null or one of the exact IDs listed above — never invent IDs
+PERSONALITY RULES — this is the most important part:
+Each agent must act according to their personality. Examples:
+- Territorial agent near a resource → claim it, warn others off, confront anyone nearby
+- Suspicious agent meeting someone → accuse, test, probe for motives
+- Charming/manipulative agent → flatter, bargain, offer deals with hidden cost
+- Short-tempered agent who is hungry → confront whoever is nearest
+- Loyal agent sees their ally threatened → defend them verbally or physically
+- Gossipy agent → reference what they've heard about others, spread suspicion
+- Cynical agent → say the uncomfortable truth, dismiss others' excuses
+- Opportunistic agent → switch sides, offer alliance to whoever has food
+- Resentful agent → bring up old slights unprompted
+- Dominant agent → test others, assert control over space or resources
 
-BEHAVIORAL RULES:
-- HIGH hunger → forage or trade, seek food resources
-- HIGH loneliness → speak, move toward nearby agents
-- HIGH fear → retreat, move away from threats
-- HIGH aggression → confront rivals, claim territories
-- HIGH curiosity → observe or wander
-- LOW energy → rest
-- Confrontations raise fear in targets
-- Agents reference specific names from their memories
-- Speech must be emotionally meaningful: deals, threats, pleas, suspicions, alliances
-- No filler dialogue like "nice weather"
-- Agents near resources should interact with them (forage/claim)
-- Agents near other agents should interact with them
+INTERACTION RULES:
+- If two agents have history (encounters > 0), they MUST reference it. No generic greetings.
+- Hungry agents don't politely ask — they demand, bargain, threaten, or steal
+- Agents with high hostility toward someone nearby should confront or provoke
+- Agents with high fear of someone nearby should retreat or try to appease
+- Territorial agents near their claimed resource should challenge anyone nearby
+- "speak" with a nearby target = direct conversation. Use their name. Say something that MEANS something.
+- NO filler: no "hello friend", no "nice to meet you", no "how are you". Every word must serve a purpose.
+- If an agent has a memory about someone present, USE IT. Call them out. Remind them. Accuse them.
+
+SCARCITY RULES:
+- Food resources have limited supply. Hungry agents should forage or fight over food.
+- If a resource is claimed, others foraging from it creates conflict — lean into it.
+- Agents with food should be targets of envy, begging, or theft attempts.
+
+JSON RULES:
+- No backslashes in strings
+- No trailing commas
+- target_id must be from the valid list or null
 
 Agents:
 {agents_json}
 
-Respond with ONLY the JSON array. No explanation. No markdown.
-"""
+JSON array only. No explanation."""
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -245,7 +250,16 @@ async def run_tick_batch(world: World):
         max_tokens=1800,
     )
 
-    raw = response.choices[0].message.content.strip()
+    raw = (response.choices[0].message.content or "").strip()
+    if not raw:
+        logger.info(f"  ← Response: finish_reason={response.choices[0].finish_reason}")
+    raw = (response.choices[0].message.content or "").strip()
+    if not raw:
+        logger.error(f"  ✗ Empty response from LLM (finish_reason={response.choices[0].finish_reason})")
+        for agent in active_agents:
+            agent.move(random.uniform(-1.0, 1.0), random.uniform(-1.0, 1.0))
+            agent.last_action = "wandering"
+        return
 
     # Strip markdown fences
     if raw.startswith("```"):
