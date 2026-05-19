@@ -1,62 +1,56 @@
 import asyncio
 import logging
-from contextlib import asynccontextmanager
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+import sys
+import os
+
+# Add project root to path
+sys.path.insert(0, os.path.dirname(__file__))
+
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from contextlib import asynccontextmanager
+
 from core.world import World
-from core.simulation import SimulationLoop
+from core.simulation import simulation_loop, set_broadcast
 from api.routes import router, set_world
-from dotenv import load_dotenv
-load_dotenv()
+from api.websocket import broadcast_snapshot
 
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s [TICK] %(message)s",
-    datefmt="%H:%M:%S"
+    format="%(asctime)s.%(msecs)03d [TICK] %(message)s",
+    datefmt="%H:%M:%S",
 )
 logger = logging.getLogger(__name__)
 
 world = World()
-simulation = SimulationLoop(world)
-set_world(world)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("🌍 Civilization awakening...")
-    task = asyncio.create_task(simulation.run())
+    set_world(world)
+    set_broadcast(broadcast_snapshot)
+    task = asyncio.create_task(simulation_loop(world))
     yield
     task.cancel()
-    logger.info("🌙 Civilization entering sleep...")
+    logger.info("🌙 Civilization shutting down...")
 
-app = FastAPI(title="Civilization API", lifespan=lifespan)
+
+app = FastAPI(
+    title="Civilization Simulation",
+    version="2.0.0",
+    lifespan=lifespan,
+)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"],      # UI can connect from anywhere
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 app.include_router(router)
 
-connected_observers: list[WebSocket] = []
 
-@app.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket):
-    await websocket.accept()
-    connected_observers.append(websocket)
-    logger.info(f"👁  Observer connected. Total: {len(connected_observers)}")
-    try:
-        # Send current world state immediately on connect
-        await websocket.send_json(world.to_snapshot())
-        while True:
-            await websocket.receive_text()  # keep alive
-    except WebSocketDisconnect:
-        connected_observers.remove(websocket)
-        logger.info(f"👁  Observer left. Total: {len(connected_observers)}")
-
-# Inject observer broadcast into simulation
-simulation.broadcast_fn = lambda snapshot: asyncio.gather(
-    *[ws.send_json(snapshot) for ws in connected_observers],
-    return_exceptions=True
-)
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)

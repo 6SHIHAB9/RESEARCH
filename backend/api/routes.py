@@ -1,5 +1,6 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
+from api.websocket import manager
 
 router = APIRouter()
 _world_ref = None
@@ -11,106 +12,143 @@ def set_world(world):
 
 @router.get("/")
 async def root():
-    return {"status": "civilization running", "version": "0.2.0"}
+    if not _world_ref:
+        return {"status": "starting"}
+    return {
+        "status": "running",
+        "tick": _world_ref.tick_number,
+        "agents": len([a for a in _world_ref.agents.values() if a.alive]),
+    }
 
 
 @router.get("/world")
 async def get_world():
     if not _world_ref:
-        return JSONResponse({"error": "world not initialized"}, status_code=503)
+        return JSONResponse({"error": "not ready"}, status_code=503)
     return _world_ref.to_snapshot()
 
 
 @router.get("/agents")
 async def get_agents():
     if not _world_ref:
-        return JSONResponse({"error": "world not initialized"}, status_code=503)
-    return [a.to_dict() for a in _world_ref.agents.values()]
+        return JSONResponse({"error": "not ready"}, status_code=503)
+    return [a.to_dict() for a in _world_ref.agents.values() if a.alive]
 
 
 @router.get("/agents/{agent_id}")
 async def get_agent(agent_id: str):
     if not _world_ref:
-        return JSONResponse({"error": "world not initialized"}, status_code=503)
+        return JSONResponse({"error": "not ready"}, status_code=503)
     agent = _world_ref.agents.get(agent_id)
     if not agent:
-        return JSONResponse({"error": "agent not found"}, status_code=404)
-    
-    # Serialize relationships with full detail
-    relationships_detail = {}
+        return JSONResponse({"error": "not found"}, status_code=404)
+
+    rels = {}
     for other_id, rel in agent.relationships.items():
         other = _world_ref.agents.get(other_id)
-        relationships_detail[other_id] = {
+        rels[other_id] = {
             "name": other.name if other else other_id,
-            "trust": round(rel.trust, 3),
-            "fear": round(rel.fear, 3),
-            "affinity": round(rel.affinity, 3),
-            "hostility": round(rel.hostility, 3),
-            "net_bond": round(rel.net_bond(), 3),
             "label": rel.label(),
+            "bond": round(rel.bond_score(), 3),
+            "trust": round(rel.trust, 3),
+            "love": round(rel.love, 3),
+            "rivalry": round(rel.rivalry, 3),
+            "fear": round(rel.fear, 3),
+            "debt": round(rel.debt, 3),
             "encounters": rel.encounters,
         }
 
     return {
         **agent.to_dict(),
         "memory": agent.memory,
-        "relationships": relationships_detail,
-        "recent_phrases": agent.recent_phrases,
+        "relationships": rels,
+        "known_recipes": _world_ref.crafting.known_recipes(agent_id),
     }
-
-
-@router.get("/events")
-async def get_events(limit: int = 50):
-    if not _world_ref:
-        return JSONResponse({"error": "world not initialized"}, status_code=503)
-    return _world_ref.event_log[-limit:]
 
 
 @router.get("/resources")
 async def get_resources():
     if not _world_ref:
-        return JSONResponse({"error": "world not initialized"}, status_code=503)
+        return JSONResponse({"error": "not ready"}, status_code=503)
     result = []
     for r in _world_ref.resources:
-        claimer_name = None
-        if r.claimed_by:
-            agent = _world_ref.agents.get(r.claimed_by)
-            claimer_name = agent.name if agent else r.claimed_by
-        result.append({
-            "name": r.name,
-            "x": r.x,
-            "y": r.y,
-            "kind": r.kind,
-            "amount": r.amount,
-            "max_amount": r.max_amount,
-            "claimed_by": r.claimed_by,
-            "claimer_name": claimer_name,
-        })
+        claimer = _world_ref.agents.get(r.claimed_by) if r.claimed_by else None
+        result.append({**r.to_dict(), "claimer_name": claimer.name if claimer else None})
     return result
 
 
 @router.get("/relationships")
-async def get_all_relationships():
-    """Return a graph of significant relationships for visualization."""
+async def get_relationships():
+    """Social graph for UI visualization."""
     if not _world_ref:
-        return JSONResponse({"error": "world not initialized"}, status_code=503)
+        return JSONResponse({"error": "not ready"}, status_code=503)
     edges = []
     seen = set()
     for agent in _world_ref.agents.values():
         for other_id, rel in agent.relationships.items():
             pair = tuple(sorted([agent.id, other_id]))
-            if pair in seen or abs(rel.net_bond()) < 0.1:
+            if pair in seen:
                 continue
             seen.add(pair)
             other = _world_ref.agents.get(other_id)
+            bond = rel.bond_score()
+            if abs(bond) < 0.05:
+                continue
             edges.append({
-                "source": agent.id,
-                "source_name": agent.name,
-                "target": other_id,
-                "target_name": other.name if other else other_id,
-                "bond": round(rel.net_bond(), 3),
+                "source": agent.id, "source_name": agent.name,
+                "target": other_id, "target_name": other.name if other else other_id,
+                "bond": round(bond, 3),
                 "label": rel.label(),
+                "trust": round(rel.trust, 3),
+                "love": round(rel.love, 3),
+                "rivalry": round(rel.rivalry, 3),
                 "encounters": rel.encounters,
             })
-    edges.sort(key=lambda e: -abs(e["bond"]))
-    return edges[:100]
+    return sorted(edges, key=lambda e: -abs(e["bond"]))
+
+
+@router.get("/economy")
+async def get_economy():
+    if not _world_ref:
+        return JSONResponse({"error": "not ready"}, status_code=503)
+    return {
+        "market": _world_ref.market.to_dict(),
+        "wealth_distribution": {
+            a.name: a.wealth()
+            for a in sorted(_world_ref.agents.values(), key=lambda x: -x.wealth())
+            if a.alive
+        },
+        "inventory_totals": _get_inventory_totals(),
+        "known_recipes": {
+            aid: _world_ref.crafting.known_recipes(aid)
+            for aid in _world_ref.agents
+        },
+    }
+
+
+def _get_inventory_totals() -> dict:
+    totals = {}
+    for agent in _world_ref.agents.values():
+        if agent.alive:
+            for item, amount in agent.inventory.items():
+                totals[item] = totals.get(item, 0) + amount
+    return totals
+
+
+@router.get("/events")
+async def get_events(limit: int = 100):
+    if not _world_ref:
+        return JSONResponse({"error": "not ready"}, status_code=503)
+    return _world_ref.events[-limit:]
+
+
+@router.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    await manager.connect(websocket)
+    if _world_ref:
+        await websocket.send_json(_world_ref.to_snapshot())
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        manager.disconnect(websocket)
