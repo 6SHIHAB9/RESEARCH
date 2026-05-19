@@ -9,17 +9,20 @@ CEREBRAS_API_KEYS = [
     os.getenv("CEREBRAS_API_KEY_2"),
     os.getenv("CEREBRAS_API_KEY_3"),
 ]
-# Filter out any keys that weren't set
 CEREBRAS_API_KEYS = [k for k in CEREBRAS_API_KEYS if k]
 
 if not CEREBRAS_API_KEYS:
     raise RuntimeError("No API keys found. Set CEREBRAS_API_KEY_1 (and optionally _2, _3) in .env")
 
 CEREBRAS_BASE_URL = "https://api.cerebras.ai/v1"
-MODEL = "gpt-oss-120b"
+
+# llama3.1-8b  — fast, reliable, free tier works fine, ~2300 tok/s
+# llama-3.3-70b — smarter but slower, still reliable
+# gpt-oss-120b  — DO NOT USE: free-tier rate limits severely reduced
+MODEL = "llama3.1-8b"
 
 # ── Simulation ────────────────────────────────────────────────────────────────
-TICK_INTERVAL_SECONDS = int(os.getenv("TICK_INTERVAL_SECONDS", "45"))
+TICK_INTERVAL_SECONDS = int(os.getenv("TICK_INTERVAL_SECONDS", "20"))
 AGENT_COUNT = 12
 AGENTS_PER_KEY = 4
 

@@ -8,7 +8,6 @@ from config import TICK_INTERVAL_SECONDS
 
 logger = logging.getLogger(__name__)
 
-# WebSocket broadcast callback (set by api/websocket.py at startup)
 _broadcast_callback = None
 
 def set_broadcast(callback):
@@ -16,30 +15,47 @@ def set_broadcast(callback):
     _broadcast_callback = callback
 
 
-def apply_results(world: World, results: list[tuple[str, dict | None]]):
-    """Apply all agent decisions to world state."""
+def _safe_float(v, default=0.0) -> float:
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return default
+
+
+
+def _sanitize_items(items) -> dict:
+    """Ensure items is a flat {str: int} dict. LLM sometimes nests dicts."""
+    if not isinstance(items, dict):
+        return {}
+    result = {}
+    for k, v in items.items():
+        if isinstance(v, (int, float)) and not isinstance(v, bool):
+            result[str(k)] = int(v)
+        # skip nested dicts/lists
+    return result
+
+def apply_results(world: World, results: list):
     for agent_id, result in results:
         agent = world.agents.get(agent_id)
         if not agent or not result:
             if agent:
-                # Fallback: just wander
                 agent.move(0.5, 0.5)
                 agent.last_action = "wandering"
             continue
 
-        action       = result["action"]
-        target_id    = result["target_id"]
-        phrase       = result.get("phrase")
-        dx           = result["dx"]
-        dy           = result["dy"]
-        mood_delta   = result["mood_delta"]
-        resource_name= result.get("resource_name")
-        give_items   = result.get("give_items", {})
-        receive_items= result.get("receive_items", {})
-        craft_a      = result.get("craft_a")
-        craft_b      = result.get("craft_b")
-        memory_note  = result.get("memory_note")
-        rel_updates  = result.get("rel_updates", {})
+        action        = result.get("action", "wander")
+        target_id     = result.get("target_id")
+        phrase        = result.get("phrase")
+        dx            = _safe_float(result.get("dx"), 0.0)
+        dy            = _safe_float(result.get("dy"), 0.0)
+        mood_delta    = _safe_float(result.get("mood_delta"), 0.0)
+        resource_name = result.get("resource_name")
+        give_items    = result.get("give_items") or {}
+        receive_items = result.get("receive_items") or {}
+        craft_a       = result.get("craft_a")
+        craft_b       = result.get("craft_b")
+        memory_note   = result.get("memory_note")
+        rel_updates   = result.get("rel_updates") or {}
 
         target = world.agents.get(target_id) if target_id else None
 
@@ -75,11 +91,15 @@ def apply_results(world: World, results: list[tuple[str, dict | None]]):
             if result_item:
                 logger.info(f"  🔨 {agent.name} crafted {result_item} from {craft_a}+{craft_b}!")
         elif action == "trade" and target and give_items and receive_items:
-            success = world.execute_trade(agent, target, give_items, receive_items)
-            if success:
-                logger.info(f"  🔄 {agent.name} traded {give_items} to {target.name} for {receive_items}")
+            give_items = _sanitize_items(give_items)
+            receive_items = _sanitize_items(receive_items)
+            if give_items and receive_items:
+                success = world.execute_trade(agent, target, give_items, receive_items)
+                if success:
+                    logger.info(f"  🔄 {agent.name} traded {give_items} to {target.name} for {receive_items}")
         elif action == "give" and target and give_items:
-            success = world.execute_trade(agent, target, give_items, {})
+            give_items = _sanitize_items(give_items)
+            success = world.execute_trade(agent, target, give_items, {}) if give_items else False
             if success:
                 agent.update_rel(target_id, trust=0.08, love=0.05)
                 target.update_rel(agent_id, trust=0.1, love=0.08, debt=-0.1)
@@ -97,33 +117,29 @@ def apply_results(world: World, results: list[tuple[str, dict | None]]):
         # ── Phrase ────────────────────────────────────────────────────────────
         if phrase and action == "speak":
             agent.last_phrase = phrase
-            agent.recent_phrases = getattr(agent, 'recent_phrases', [])
-            agent.recent_phrases.append(phrase)
 
-        # ── Relationships ─────────────────────────────────────────────────────
-        for rel_target_id, updates in rel_updates.items():
-            if rel_target_id in world.agents:
-                agent.update_rel(rel_target_id,
-                    trust   = float(updates.get("trust", 0)),
-                    love    = float(updates.get("love", 0)),
-                    rivalry = float(updates.get("rivalry", 0)),
-                    fear    = float(updates.get("fear", 0)),
-                    debt    = float(updates.get("debt", 0)),
-                )
+        # ── Relationships — safe_float every value ────────────────────────────
+        if isinstance(rel_updates, dict):
+            for rel_target_id, updates in rel_updates.items():
+                if rel_target_id in world.agents and isinstance(updates, dict):
+                    agent.update_rel(rel_target_id,
+                        trust   = _safe_float(updates.get("trust"),   0.0),
+                        love    = _safe_float(updates.get("love"),    0.0),
+                        rivalry = _safe_float(updates.get("rivalry"), 0.0),
+                        fear    = _safe_float(updates.get("fear"),    0.0),
+                        debt    = _safe_float(updates.get("debt"),    0.0),
+                    )
 
         # ── Memory ────────────────────────────────────────────────────────────
         if memory_note:
-            agent.remember(world.tick_number, memory_note)
+            agent.remember(world.tick_number, str(memory_note))
 
         agent.last_action = action
-
-        # ── Logging ───────────────────────────────────────────────────────────
         _log_action(world, agent, action, phrase, target, dx, dy)
 
 
 def _log_action(world, agent, action, phrase, target, dx, dy):
     tname = target.name if target else ""
-    tick = world.tick_number
 
     if action == "speak" and phrase:
         logger.info(f"  💬 {agent.name} → {tname or '(alone)'}: \"{phrase}\"")
@@ -132,8 +148,7 @@ def _log_action(world, agent, action, phrase, target, dx, dy):
                               "phrase": phrase})
     elif action == "confront":
         logger.info(f"  ⚡ {agent.name} confronted {tname}")
-        world.log("confrontation", {"agent": agent.name, "agent_id": agent.id,
-                                     "target": tname})
+        world.log("confrontation", {"agent": agent.name, "agent_id": agent.id, "target": tname})
     elif action == "retreat":
         logger.info(f"  ↩  {agent.name} retreated from {tname or 'threat'}")
     elif action == "rest":
@@ -155,51 +170,40 @@ def _log_action(world, agent, action, phrase, target, dx, dy):
     elif action == "craft":
         logger.info(f"  🔨 {agent.name} crafting")
 
-    # Relationship milestones
     if target:
         rel = agent.get_rel(target.id)
         if rel.encounters > 0 and rel.encounters % 5 == 0:
             bond = rel.bond_score()
-            label = rel.label()
             if abs(bond) > 0.3:
                 emoji = "🤝" if bond > 0 else "⚔️"
-                logger.info(f"  {emoji} {agent.name} ↔ {tname}: {label} (bond={bond:.2f}, encounters={rel.encounters})")
+                logger.info(f"  {emoji} {agent.name} ↔ {tname}: {rel.label()} (bond={bond:.2f}, enc={rel.encounters})")
 
 
 async def simulation_loop(world: World):
-    """Main tick loop."""
     logger.info("🌍 Civilization awakening...")
     logger.info(f"⚙️  Tick interval: {TICK_INTERVAL_SECONDS}s | Agents: {len(world.agents)}")
 
     while True:
         tick_start = time.time()
         world.tick_number += 1
-
         logger.info(f"━━━ TICK {world.tick_number} ━━━")
 
-        # 1. Passive decay
         world.tick_needs()
         world.tick_resources()
         world.tick_social_status()
 
-        # 2. LLM decisions (all agents, parallel groups)
         try:
             results = await run_tick(world)
             apply_results(world, results)
         except Exception as e:
-            logger.error(f"  Tick error: {e}")
+            logger.error(f"  Tick error: {e}", exc_info=True)
 
-        # 3. Broadcast to UI
         if _broadcast_callback:
             try:
-                snapshot = world.to_snapshot()
-                await _broadcast_callback(snapshot)
+                await _broadcast_callback(world.to_snapshot())
             except Exception as e:
                 logger.error(f"  Broadcast error: {e}")
 
         elapsed = time.time() - tick_start
         logger.info(f"✓ Tick {world.tick_number} complete ({elapsed:.1f}s)")
-
-        # Wait for next tick
-        sleep_time = max(0, TICK_INTERVAL_SECONDS - elapsed)
-        await asyncio.sleep(sleep_time)
+        await asyncio.sleep(max(0, TICK_INTERVAL_SECONDS - elapsed))

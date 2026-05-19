@@ -1,0 +1,1076 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CIVILIZATION — Emergent Society Simulation</title>
+<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Share+Tech+Mono&family=Crimson+Pro:ital,wght@0,300;0,400;1,300&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #08090d;
+    --bg2: #0d0f14;
+    --bg3: #12151c;
+    --border: rgba(160,140,100,0.15);
+    --gold: #c8a84b;
+    --gold2: #e8c87a;
+    --gold-dim: rgba(200,168,75,0.3);
+    --text: #d4c9a8;
+    --text-dim: rgba(212,201,168,0.5);
+    --text-bright: #f0e8cc;
+    --red: #c84b4b;
+    --green: #4bc87a;
+    --blue: #4b8ec8;
+    --purple: #8b4bc8;
+    --map-w: 60;
+    --map-h: 60;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Share Tech Mono', monospace;
+    height: 100vh;
+    overflow: hidden;
+    display: grid;
+    grid-template-rows: 52px 1fr;
+    grid-template-columns: 1fr 340px;
+  }
+
+  /* ── Header ── */
+  header {
+    grid-column: 1 / -1;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 24px;
+    border-bottom: 1px solid var(--border);
+    background: linear-gradient(90deg, #08090d, #0d0f14);
+    position: relative;
+    overflow: hidden;
+  }
+  header::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: repeating-linear-gradient(90deg, transparent, transparent 80px, rgba(200,168,75,0.03) 80px, rgba(200,168,75,0.03) 81px);
+  }
+  .logo {
+    font-family: 'Cinzel', serif;
+    font-size: 18px;
+    font-weight: 700;
+    letter-spacing: 6px;
+    color: var(--gold);
+    text-shadow: 0 0 20px rgba(200,168,75,0.4);
+  }
+  .logo span { color: var(--text-dim); font-weight: 400; font-size: 11px; letter-spacing: 3px; margin-left: 12px; }
+  .header-stats {
+    display: flex;
+    gap: 32px;
+    font-size: 11px;
+    color: var(--text-dim);
+  }
+  .stat { text-align: center; }
+  .stat-val { color: var(--gold); font-size: 16px; display: block; }
+  .conn-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--red);
+    display: inline-block;
+    margin-right: 6px;
+    transition: background 0.3s;
+  }
+  .conn-dot.live { background: var(--green); box-shadow: 0 0 8px var(--green); animation: pulse 2s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.5} }
+
+  /* ── Map Area ── */
+  #map-area {
+    position: relative;
+    overflow: hidden;
+    background: var(--bg);
+    border-right: 1px solid var(--border);
+  }
+
+  #world-canvas {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+  }
+
+  /* Agent labels */
+  .agent-label {
+    position: absolute;
+    transform: translate(-50%, -100%);
+    pointer-events: none;
+    z-index: 10;
+    transition: left 0.8s cubic-bezier(0.4,0,0.2,1), top 0.8s cubic-bezier(0.4,0,0.2,1);
+  }
+  .agent-name {
+    font-family: 'Cinzel', serif;
+    font-size: 10px;
+    color: var(--gold2);
+    text-align: center;
+    letter-spacing: 1px;
+    text-shadow: 0 0 10px rgba(0,0,0,0.9), 0 0 20px rgba(0,0,0,0.9);
+    white-space: nowrap;
+  }
+  .agent-bubble {
+    background: rgba(8,9,13,0.92);
+    border: 1px solid var(--gold-dim);
+    border-radius: 4px;
+    padding: 5px 8px;
+    font-size: 10px;
+    font-family: 'Crimson Pro', serif;
+    font-style: italic;
+    color: var(--text);
+    max-width: 160px;
+    text-align: center;
+    margin-bottom: 4px;
+    white-space: normal;
+    line-height: 1.3;
+    animation: bubbleIn 0.3s ease;
+    position: relative;
+  }
+  .agent-bubble::after {
+    content: '';
+    position: absolute;
+    bottom: -5px;
+    left: 50%;
+    transform: translateX(-50%);
+    border: 5px solid transparent;
+    border-top-color: var(--gold-dim);
+    border-bottom: none;
+  }
+  @keyframes bubbleIn {
+    from { opacity: 0; transform: translateY(-4px) scale(0.95); }
+    to   { opacity: 1; transform: translateY(0) scale(1); }
+  }
+  .agent-dot-wrapper {
+    position: absolute;
+    transform: translate(-50%, -50%);
+    transition: left 0.8s cubic-bezier(0.4,0,0.2,1), top 0.8s cubic-bezier(0.4,0,0.2,1);
+    cursor: pointer;
+    z-index: 5;
+  }
+  .agent-dot {
+    width: 12px; height: 12px;
+    border-radius: 50%;
+    border: 2px solid var(--gold);
+    background: rgba(200,168,75,0.3);
+    transition: all 0.3s;
+    position: relative;
+  }
+  .agent-dot::before {
+    content: '';
+    position: absolute;
+    inset: -4px;
+    border-radius: 50%;
+    border: 1px solid rgba(200,168,75,0.2);
+    animation: agentPulse 3s infinite;
+  }
+  @keyframes agentPulse {
+    0%,100%{transform:scale(1);opacity:0.5}
+    50%{transform:scale(1.5);opacity:0}
+  }
+  .agent-dot.hostile { border-color: var(--red); background: rgba(200,75,75,0.3); }
+  .agent-dot.hostile::before { border-color: rgba(200,75,75,0.2); }
+  .agent-dot.friendly { border-color: var(--green); background: rgba(75,200,122,0.3); }
+  .agent-dot.trading { border-color: var(--blue); background: rgba(75,142,200,0.3); }
+  .agent-dot.confronting { border-color: var(--red); background: rgba(200,75,75,0.5); animation: confrontPulse 0.5s infinite; }
+  @keyframes confrontPulse { 0%,100%{transform:scale(1)} 50%{transform:scale(1.2)} }
+
+  /* Resource nodes */
+  .resource-node {
+    position: absolute;
+    transform: translate(-50%, -50%);
+    pointer-events: none;
+    z-index: 2;
+  }
+  .resource-icon {
+    font-size: 16px;
+    filter: drop-shadow(0 0 4px rgba(200,168,75,0.4));
+    transition: opacity 0.3s;
+  }
+  .resource-bar {
+    width: 28px;
+    height: 3px;
+    background: rgba(255,255,255,0.1);
+    border-radius: 2px;
+    margin-top: 2px;
+    overflow: hidden;
+  }
+  .resource-fill {
+    height: 100%;
+    background: var(--gold);
+    border-radius: 2px;
+    transition: width 0.5s;
+  }
+  .resource-fill.depleted { background: var(--red); }
+
+  /* Relationship lines canvas */
+  #rel-canvas {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    z-index: 3;
+  }
+
+  /* ── Sidebar ── */
+  #sidebar {
+    display: grid;
+    grid-template-rows: auto 1fr auto;
+    overflow: hidden;
+    background: var(--bg2);
+  }
+
+  .panel {
+    border-bottom: 1px solid var(--border);
+    overflow: hidden;
+  }
+  .panel-header {
+    padding: 10px 16px;
+    font-family: 'Cinzel', serif;
+    font-size: 10px;
+    letter-spacing: 3px;
+    color: var(--gold);
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: rgba(200,168,75,0.04);
+  }
+  .panel-badge {
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 9px;
+    background: var(--gold-dim);
+    color: var(--gold);
+    padding: 2px 6px;
+    border-radius: 2px;
+  }
+
+  /* Chronicle */
+  #chronicle {
+    flex: 1;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+  #chronicle-scroll {
+    flex: 1;
+    overflow-y: auto;
+    padding: 10px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  #chronicle-scroll::-webkit-scrollbar { width: 3px; }
+  #chronicle-scroll::-webkit-scrollbar-thumb { background: var(--gold-dim); }
+
+  .event-item {
+    font-size: 11px;
+    line-height: 1.5;
+    padding: 6px 8px;
+    border-radius: 3px;
+    border-left: 2px solid transparent;
+    animation: eventIn 0.3s ease;
+    transition: background 0.2s;
+  }
+  .event-item:hover { background: rgba(200,168,75,0.05); }
+  @keyframes eventIn {
+    from { opacity: 0; transform: translateX(-8px); }
+    to   { opacity: 1; transform: translateX(0); }
+  }
+  .event-tick { color: var(--text-dim); font-size: 9px; margin-right: 6px; }
+  .event-speech { border-left-color: var(--blue); }
+  .event-speech .ev-icon { color: var(--blue); }
+  .event-trade { border-left-color: var(--green); }
+  .event-trade .ev-icon { color: var(--green); }
+  .event-confrontation { border-left-color: var(--red); }
+  .event-confrontation .ev-icon { color: var(--red); }
+  .event-forage { border-left-color: rgba(200,168,75,0.4); }
+  .event-forage .ev-icon { color: var(--gold); }
+  .event-give { border-left-color: var(--purple); }
+  .event-give .ev-icon { color: var(--purple); }
+  .event-generic { border-left-color: var(--border); }
+  .ev-agent { color: var(--gold2); font-weight: 600; }
+  .ev-phrase { font-family: 'Crimson Pro', serif; font-style: italic; color: var(--text); }
+
+  /* Narrative box */
+  #narrative-box {
+    padding: 14px 16px;
+    border-top: 1px solid var(--border);
+    background: rgba(200,168,75,0.03);
+    min-height: 80px;
+  }
+  .narrative-label {
+    font-family: 'Cinzel', serif;
+    font-size: 9px;
+    letter-spacing: 3px;
+    color: var(--gold-dim);
+    margin-bottom: 8px;
+  }
+  #narrative-text {
+    font-family: 'Crimson Pro', serif;
+    font-size: 13px;
+    line-height: 1.6;
+    color: var(--text);
+    font-style: italic;
+  }
+
+  /* Agent inspect panel */
+  #agent-panel {
+    position: absolute;
+    bottom: 20px;
+    left: 20px;
+    width: 240px;
+    background: rgba(8,9,13,0.95);
+    border: 1px solid var(--gold-dim);
+    border-radius: 4px;
+    padding: 14px;
+    z-index: 20;
+    display: none;
+    backdrop-filter: blur(8px);
+  }
+  #agent-panel.visible { display: block; animation: panelIn 0.2s ease; }
+  @keyframes panelIn { from{opacity:0;transform:translateY(8px)} to{opacity:1;transform:translateY(0)} }
+  .ap-name {
+    font-family: 'Cinzel', serif;
+    font-size: 14px;
+    color: var(--gold2);
+    margin-bottom: 4px;
+  }
+  .ap-backstory {
+    font-family: 'Crimson Pro', serif;
+    font-style: italic;
+    font-size: 11px;
+    color: var(--text-dim);
+    line-height: 1.4;
+    margin-bottom: 10px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border);
+  }
+  .ap-row {
+    display: flex;
+    justify-content: space-between;
+    font-size: 10px;
+    margin-bottom: 4px;
+    color: var(--text-dim);
+  }
+  .ap-val { color: var(--text); }
+  .need-bar-wrap { display: flex; align-items: center; gap: 6px; margin-bottom: 3px; font-size: 9px; color: var(--text-dim); }
+  .need-bar { flex: 1; height: 4px; background: rgba(255,255,255,0.05); border-radius: 2px; overflow: hidden; }
+  .need-fill { height: 100%; border-radius: 2px; transition: width 0.5s; }
+  .ap-close {
+    position: absolute; top: 8px; right: 10px;
+    color: var(--text-dim); cursor: pointer; font-size: 14px;
+  }
+  .ap-close:hover { color: var(--gold); }
+  .ap-rels { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border); }
+  .ap-rel-item { font-size: 9px; color: var(--text-dim); margin-bottom: 2px; }
+  .ap-rel-item span { color: var(--text); }
+
+  /* Tick flash */
+  #tick-flash {
+    position: absolute;
+    inset: 0;
+    background: rgba(200,168,75,0.04);
+    pointer-events: none;
+    opacity: 0;
+    z-index: 50;
+    transition: opacity 0.1s;
+  }
+  #tick-flash.flash { opacity: 1; }
+
+  /* Map grid overlay */
+  .map-grid {
+    position: absolute;
+    inset: 0;
+    background-image:
+      linear-gradient(rgba(200,168,75,0.04) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(200,168,75,0.04) 1px, transparent 1px);
+    background-size: calc(100%/6) calc(100%/6);
+    pointer-events: none;
+    z-index: 1;
+  }
+
+  /* Landmark labels */
+  .landmark-label {
+    position: absolute;
+    transform: translate(-50%, -50%);
+    font-family: 'Cinzel', serif;
+    font-size: 9px;
+    color: rgba(200,168,75,0.3);
+    letter-spacing: 1px;
+    pointer-events: none;
+    z-index: 1;
+    text-align: center;
+  }
+
+  /* Tick counter overlay on map */
+  #map-tick {
+    position: absolute;
+    top: 14px;
+    left: 14px;
+    font-family: 'Cinzel', serif;
+    font-size: 11px;
+    color: var(--gold-dim);
+    letter-spacing: 2px;
+    z-index: 10;
+  }
+
+  /* Relationship filter */
+  #rel-toggle {
+    position: absolute;
+    top: 14px;
+    right: 14px;
+    display: flex;
+    gap: 6px;
+    z-index: 10;
+  }
+  .rtbtn {
+    font-size: 9px;
+    font-family: 'Share Tech Mono', monospace;
+    padding: 4px 8px;
+    border: 1px solid var(--border);
+    background: rgba(8,9,13,0.8);
+    color: var(--text-dim);
+    cursor: pointer;
+    border-radius: 2px;
+    letter-spacing: 1px;
+    transition: all 0.2s;
+  }
+  .rtbtn:hover, .rtbtn.active { border-color: var(--gold-dim); color: var(--gold); background: rgba(200,168,75,0.08); }
+
+  /* Agents table in sidebar bottom */
+  #agents-strip {
+    overflow-y: auto;
+    max-height: 180px;
+    padding: 8px 12px;
+  }
+  #agents-strip::-webkit-scrollbar { width: 3px; }
+  #agents-strip::-webkit-scrollbar-thumb { background: var(--gold-dim); }
+  .agent-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 6px;
+    border-radius: 3px;
+    cursor: pointer;
+    transition: background 0.2s;
+    font-size: 10px;
+  }
+  .agent-row:hover { background: rgba(200,168,75,0.06); }
+  .agent-row-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+  .agent-row-name { color: var(--gold2); font-family: 'Cinzel', serif; font-size: 10px; min-width: 36px; }
+  .agent-row-action { color: var(--text-dim); flex: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  .agent-row-mood { color: var(--text-dim); font-size: 9px; }
+
+  /* Connection lost overlay */
+  #conn-overlay {
+    display: none;
+    position: absolute;
+    inset: 0;
+    background: rgba(8,9,13,0.85);
+    z-index: 100;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    gap: 12px;
+    font-family: 'Cinzel', serif;
+  }
+  #conn-overlay.visible { display: flex; }
+  #conn-overlay h2 { color: var(--red); letter-spacing: 4px; font-size: 16px; }
+  #conn-overlay p { color: var(--text-dim); font-size: 11px; font-family: 'Share Tech Mono', monospace; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">CIVILIZATION <span>EMERGENT SOCIETY ENGINE</span></div>
+  <div class="header-stats">
+    <div class="stat"><span class="stat-val" id="h-tick">0</span>TICK</div>
+    <div class="stat"><span class="stat-val" id="h-agents">12</span>AGENTS</div>
+    <div class="stat"><span class="stat-val" id="h-events">0</span>EVENTS</div>
+    <div class="stat"><span class="stat-val" id="h-trades">0</span>TRADES</div>
+    <div style="display:flex;align-items:center;font-size:11px">
+      <span class="conn-dot" id="conn-dot"></span>
+      <span id="conn-label">CONNECTING</span>
+    </div>
+  </div>
+</header>
+
+<div id="map-area">
+  <div class="map-grid"></div>
+  <canvas id="rel-canvas"></canvas>
+  <canvas id="world-canvas"></canvas>
+  <div id="tick-flash"></div>
+  <div id="map-tick">TICK 0</div>
+  <div id="rel-toggle">
+    <button class="rtbtn active" id="btn-all" onclick="setRelFilter('all')">ALL BONDS</button>
+    <button class="rtbtn" id="btn-allies" onclick="setRelFilter('allies')">ALLIES</button>
+    <button class="rtbtn" id="btn-rivals" onclick="setRelFilter('rivals')">RIVALS</button>
+    <button class="rtbtn" id="btn-none" onclick="setRelFilter('none')">HIDE</button>
+  </div>
+  <div id="agent-panel">
+    <span class="ap-close" onclick="closeAgentPanel()">✕</span>
+    <div class="ap-name" id="ap-name"></div>
+    <div class="ap-backstory" id="ap-backstory"></div>
+    <div id="ap-needs"></div>
+    <div class="ap-rels" id="ap-rels"></div>
+  </div>
+  <div id="conn-overlay">
+    <h2>CONNECTION LOST</h2>
+    <p>Attempting to reconnect to simulation server...</p>
+  </div>
+</div>
+
+<div id="sidebar">
+  <div class="panel" style="flex-shrink:0">
+    <div class="panel-header">CHRONICLE <span class="panel-badge" id="event-count">0 EVENTS</span></div>
+    <div id="chronicle">
+      <div id="chronicle-scroll"></div>
+    </div>
+  </div>
+  <div style="flex-shrink:0">
+    <div class="panel-header">AGENTS <span class="panel-badge" id="agent-count">12</span></div>
+    <div id="agents-strip"></div>
+  </div>
+  <div id="narrative-box">
+    <div class="narrative-label">SITUATION REPORT</div>
+    <div id="narrative-text">Awaiting simulation data...</div>
+  </div>
+</div>
+
+<!-- Agent DOM elements will be injected here -->
+<div id="agent-labels" style="position:absolute;inset:0;pointer-events:none;z-index:8;overflow:hidden"></div>
+<div id="agent-dots" style="position:absolute;inset:0;z-index:6;overflow:hidden"></div>
+<div id="resource-nodes" style="position:absolute;inset:0;pointer-events:none;z-index:2;overflow:hidden"></div>
+
+<script>
+// ── Config ──────────────────────────────────────────────────────────────────
+const WS_URL = 'ws://localhost:8000/ws';
+const WORLD_W = 60, WORLD_H = 60;
+const RECONNECT_DELAY = 3000;
+
+// ── State ───────────────────────────────────────────────────────────────────
+let state = {
+  agents: {},
+  resources: [],
+  events: [],
+  tick: 0,
+  totalEvents: 0,
+  totalTrades: 0,
+};
+let agentElements = {}; // id -> {label, dot}
+let resourceElements = {}; // name -> el
+let selectedAgent = null;
+let relFilter = 'all';
+let ws = null;
+
+// ── Resource icons ───────────────────────────────────────────────────────────
+const RESOURCE_ICONS = {
+  berries: '🫐', fish: '🐟', water: '💧',
+  wood: '🪵', stone: '🪨', herbs: '🌿',
+};
+
+// ── Relationship colors ───────────────────────────────────────────────────────
+function bondColor(bond) {
+  if (bond > 0.4) return 'rgba(75,200,122,';
+  if (bond > 0.1) return 'rgba(75,200,122,';
+  if (bond < -0.3) return 'rgba(200,75,75,';
+  return 'rgba(200,168,75,';
+}
+
+// ── Coord conversion ─────────────────────────────────────────────────────────
+function toScreen(wx, wy) {
+  const area = document.getElementById('map-area');
+  const rect = area.getBoundingClientRect();
+  return {
+    x: (wx / WORLD_W) * rect.width,
+    y: (wy / WORLD_H) * rect.height,
+  };
+}
+
+// ── Agent color by mood ───────────────────────────────────────────────────────
+function moodColor(agent) {
+  const mood = agent.mood || 0.5;
+  if (mood > 0.6) return '#4bc87a';
+  if (mood < 0.25) return '#c84b4b';
+  return '#c8a84b';
+}
+
+// ── Needs color ───────────────────────────────────────────────────────────────
+function needColor(val) {
+  if (val > 0.7) return '#c84b4b';
+  if (val > 0.4) return '#c8a84b';
+  return '#4bc87a';
+}
+
+// ── Create agent elements ────────────────────────────────────────────────────
+function ensureAgent(agent) {
+  if (agentElements[agent.id]) return;
+
+  const labelsDiv = document.getElementById('agent-labels');
+  const dotsDiv = document.getElementById('agent-dots');
+
+  // Label (bubble + name)
+  const label = document.createElement('div');
+  label.className = 'agent-label';
+  label.id = `label-${agent.id}`;
+  label.innerHTML = `
+    <div class="agent-bubble" id="bubble-${agent.id}" style="display:none"></div>
+    <div class="agent-name">${agent.name.toUpperCase()}</div>
+  `;
+  labelsDiv.appendChild(label);
+
+  // Dot
+  const dotWrap = document.createElement('div');
+  dotWrap.className = 'agent-dot-wrapper';
+  dotWrap.id = `dot-${agent.id}`;
+  dotWrap.innerHTML = `<div class="agent-dot" id="agdot-${agent.id}"></div>`;
+  dotWrap.onclick = () => openAgentPanel(agent.id);
+  dotsDiv.appendChild(dotWrap);
+
+  agentElements[agent.id] = { label, dotWrap };
+}
+
+// ── Update agent positions & state ───────────────────────────────────────────
+function updateAgents(agents) {
+  agents.forEach(agent => {
+    ensureAgent(agent);
+    state.agents[agent.id] = agent;
+
+    const pos = toScreen(agent.x, agent.y);
+    const el = agentElements[agent.id];
+
+    // Position dot
+    el.dotWrap.style.left = pos.x + 'px';
+    el.dotWrap.style.top = pos.y + 'px';
+
+    // Position label slightly above dot
+    el.label.style.left = pos.x + 'px';
+    el.label.style.top = (pos.y - 14) + 'px';
+
+    // Dot color
+    const dot = document.getElementById(`agdot-${agent.id}`);
+    dot.style.borderColor = moodColor(agent);
+    dot.style.background = moodColor(agent).replace(')', ',0.3)').replace('rgb', 'rgba').replace('#', '').length > 7
+      ? moodColor(agent) + '4d'
+      : hexToRgba(moodColor(agent), 0.3);
+
+    // Action class
+    dot.className = 'agent-dot';
+    if (agent.last_action === 'confront') dot.classList.add('confronting');
+    else if (agent.last_action === 'trade' || agent.last_action === 'give') dot.classList.add('trading');
+  });
+}
+
+function hexToRgba(hex, alpha) {
+  const r = parseInt(hex.slice(1,3),16), g = parseInt(hex.slice(3,5),16), b = parseInt(hex.slice(5,7),16);
+  return `rgba(${r},${g},${b},${alpha})`;
+}
+
+// ── Speech bubbles ────────────────────────────────────────────────────────────
+function showBubbles(events) {
+  // Clear all bubbles first
+  document.querySelectorAll('.agent-bubble').forEach(b => { b.style.display = 'none'; b.textContent = ''; });
+
+  // Show this tick's speech
+  events.filter(e => e.type === 'speech' && e.phrase).forEach(e => {
+    const bubble = document.getElementById(`bubble-${e.agent_id}`);
+    if (bubble) {
+      bubble.textContent = `"${e.phrase}"`;
+      bubble.style.display = 'block';
+    }
+  });
+}
+
+// ── Resource nodes ────────────────────────────────────────────────────────────
+function updateResources(resources) {
+  const container = document.getElementById('resource-nodes');
+  resources.forEach(res => {
+    if (!resourceElements[res.name]) {
+      const el = document.createElement('div');
+      el.className = 'resource-node';
+      el.id = `res-${res.name.replace(/\s/g,'-')}`;
+      el.innerHTML = `
+        <div class="resource-icon">${RESOURCE_ICONS[res.kind] || '📦'}</div>
+        <div class="resource-bar"><div class="resource-fill" id="rfill-${res.name.replace(/\s/g,'-')}"></div></div>
+      `;
+      container.appendChild(el);
+      resourceElements[res.name] = el;
+    }
+    const pos = toScreen(res.x, res.y);
+    const el = resourceElements[res.name];
+    el.style.left = pos.x + 'px';
+    el.style.top = pos.y + 'px';
+
+    const fill = document.getElementById(`rfill-${res.name.replace(/\s/g,'-')}`);
+    if (fill) {
+      const pct = (res.amount / res.max_amount) * 100;
+      fill.style.width = pct + '%';
+      fill.className = 'resource-fill' + (pct < 20 ? ' depleted' : '');
+    }
+    el.style.opacity = res.amount === 0 ? '0.3' : '1';
+  });
+}
+
+// ── Relationship lines ────────────────────────────────────────────────────────
+function drawRelationships() {
+  const canvas = document.getElementById('rel-canvas');
+  const area = document.getElementById('map-area');
+  canvas.width = area.clientWidth;
+  canvas.height = area.clientHeight;
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  if (relFilter === 'none') return;
+
+  const agents = Object.values(state.agents);
+  const drawn = new Set();
+
+  agents.forEach(agent => {
+    if (!agent.top_relationships) return;
+    agent.top_relationships.forEach(rel => {
+      const key = [agent.id, rel.id].sort().join('-');
+      if (drawn.has(key)) return;
+      drawn.add(key);
+
+      const bond = rel.bond;
+      if (relFilter === 'allies' && bond <= 0.15) return;
+      if (relFilter === 'rivals' && bond >= -0.15) return;
+      if (Math.abs(bond) < 0.08) return;
+
+      const other = state.agents[rel.id];
+      if (!other) return;
+
+      const p1 = toScreen(agent.x, agent.y);
+      const p2 = toScreen(other.x, other.y);
+
+      const alpha = Math.min(0.7, Math.abs(bond) * 1.2);
+      let color;
+      if (bond > 0.3) color = `rgba(75,200,122,${alpha})`;
+      else if (bond < -0.3) color = `rgba(200,75,75,${alpha})`;
+      else color = `rgba(200,168,75,${alpha * 0.5})`;
+
+      ctx.beginPath();
+      ctx.moveTo(p1.x, p1.y);
+      ctx.lineTo(p2.x, p2.y);
+      ctx.strokeStyle = color;
+      ctx.lineWidth = Math.abs(bond) * 2;
+      ctx.setLineDash(bond < 0 ? [4, 4] : []);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    });
+  });
+}
+
+// ── Chronicle ─────────────────────────────────────────────────────────────────
+const EVENT_ICONS = {
+  speech: '💬', trade: '🔄', confrontation: '⚡',
+  forage: '🌿', give: '🎁', territory_claimed: '🚩',
+  territory_seized: '🏴', resource_conflict: '⚔️',
+  discovery: '✨', resource_depleted: '💀',
+};
+
+function addEvent(event) {
+  const scroll = document.getElementById('chronicle-scroll');
+  const type = event.type || 'generic';
+  const icon = EVENT_ICONS[type] || '•';
+
+  const item = document.createElement('div');
+  item.className = `event-item event-${type}`;
+
+  let text = '';
+  if (type === 'speech' && event.phrase) {
+    text = `<span class="ev-agent">${event.agent}</span> → <span class="ev-agent">${event.target || '?'}</span>: <span class="ev-phrase">"${event.phrase}"</span>`;
+  } else if (type === 'trade') {
+    const gave = event.gave ? Object.entries(event.gave).map(([k,v])=>`${v} ${k}`).join(', ') : '';
+    const got = event.received ? Object.entries(event.received).map(([k,v])=>`${v} ${k}`).join(', ') : '';
+    text = `<span class="ev-agent">${event.agent}</span> traded ${gave ? gave : ''} with <span class="ev-agent">${event.to || event.target || '?'}</span>${got ? ` for ${got}` : ''}`;
+  } else if (type === 'confrontation') {
+    text = `<span class="ev-agent">${event.agent}</span> confronted <span class="ev-agent">${event.target || '?'}</span>`;
+  } else if (type === 'give') {
+    text = `<span class="ev-agent">${event.agent}</span> gave to <span class="ev-agent">${event.to || event.target || '?'}</span>`;
+  } else if (type === 'territory_claimed') {
+    text = `<span class="ev-agent">${event.agent}</span> claimed ${event.resource}`;
+  } else if (type === 'territory_seized') {
+    text = `<span class="ev-agent">${event.agent}</span> seized ${event.resource} from <span class="ev-agent">${event.from}</span>`;
+  } else if (type === 'discovery') {
+    text = `<span class="ev-agent">${event.agent}</span> discovered ${event.recipe}!`;
+  } else {
+    text = `${event.agent || ''} ${event.resource || ''} ${event.resource_name || ''}`;
+  }
+
+  item.innerHTML = `<span class="event-tick ev-icon">${icon}</span><span class="event-tick">[${event.tick}]</span>${text}`;
+  scroll.appendChild(item);
+
+  // Keep last 200
+  while (scroll.children.length > 200) scroll.removeChild(scroll.firstChild);
+  scroll.scrollTop = scroll.scrollHeight;
+
+  state.totalEvents++;
+  if (type === 'trade') state.totalTrades++;
+}
+
+// ── Narrative generator ───────────────────────────────────────────────────────
+function generateNarrative(snapshot) {
+  const agents = snapshot.agents || [];
+  const events = snapshot.events || [];
+  const tick = snapshot.tick;
+
+  // Find most interesting things
+  const recentEvents = events.slice(-20);
+  const speeches = recentEvents.filter(e => e.type === 'speech' && e.phrase);
+  const confrontations = recentEvents.filter(e => e.type === 'confrontation');
+  const trades = recentEvents.filter(e => e.type === 'trade');
+
+  // Find hungry agents
+  const hungry = agents.filter(a => a.needs && a.needs.hunger > 0.7).map(a => a.name);
+  // Find richest agent
+  const richest = agents.sort((a,b) => (b.wealth||0)-(a.wealth||0))[0];
+  // Find enemies
+  const enemies = [];
+  agents.forEach(a => {
+    (a.top_relationships||[]).forEach(r => {
+      if (r.label === 'enemy' || r.label === 'hostile') enemies.push(`${a.name}↔${r.id}`);
+    });
+  });
+
+  let narratives = [];
+
+  if (tick <= 3) narratives.push("The world awakens. Twelve souls, dropped into the wilderness with nothing but instinct and memory.");
+  if (hungry.length > 0) narratives.push(`${hungry.join(', ')} ${hungry.length > 1 ? 'are' : 'is'} growing desperate for food.`);
+  if (confrontations.length > 0) {
+    const c = confrontations[confrontations.length - 1];
+    narratives.push(`Tension is rising — ${c.agent} has confronted ${c.target || 'someone'}.`);
+  }
+  if (speeches.length > 0) {
+    const s = speeches[speeches.length - 1];
+    narratives.push(`${s.agent} to ${s.target}: "${s.phrase}"`);
+  }
+  if (richest && richest.wealth > 5) narratives.push(`${richest.name} has accumulated ${richest.wealth} resources — wealth is power here.`);
+  if (trades.length > 2) narratives.push(`An economy is forming. ${trades.length} trades this cycle.`);
+
+  const allRivals = [];
+  agents.forEach(a => (a.top_relationships||[]).forEach(r => {
+    if (r.bond < -0.3) allRivals.push(`${a.name} and ${r.id}`);
+  }));
+  if (allRivals.length > 0) narratives.push(`Rivalries hardening: ${allRivals[0]}.`);
+
+  if (narratives.length === 0) narratives.push(`Tick ${tick}. The world watches and waits.`);
+
+  document.getElementById('narrative-text').textContent = narratives.slice(-2).join(' ');
+}
+
+// ── Agent panel ───────────────────────────────────────────────────────────────
+function openAgentPanel(agentId) {
+  const agent = state.agents[agentId];
+  if (!agent) return;
+  selectedAgent = agentId;
+
+  document.getElementById('ap-name').textContent = agent.name;
+  document.getElementById('ap-backstory').textContent = agent.backstory || '';
+
+  const needs = agent.needs || {};
+  const needsHtml = Object.entries(needs).map(([k, v]) => `
+    <div class="need-bar-wrap">
+      <span style="min-width:64px">${k}</span>
+      <div class="need-bar"><div class="need-fill" style="width:${v*100}%;background:${needColor(v)}"></div></div>
+      <span style="color:${needColor(v)}">${(v*100).toFixed(0)}%</span>
+    </div>
+  `).join('');
+  document.getElementById('ap-needs').innerHTML = needsHtml;
+
+  const rels = agent.top_relationships || [];
+  const relsHtml = rels.length > 0
+    ? '<div style="font-size:9px;color:var(--gold-dim);margin-bottom:4px;letter-spacing:2px">RELATIONSHIPS</div>' +
+      rels.map(r => {
+        const other = Object.values(state.agents).find(a => a.id === r.id);
+        const name = other ? other.name : r.id;
+        const col = r.bond > 0.2 ? 'var(--green)' : r.bond < -0.2 ? 'var(--red)' : 'var(--text-dim)';
+        return `<div class="ap-rel-item"><span style="color:${col}">${name}</span> — ${r.label} (${r.bond > 0 ? '+' : ''}${r.bond.toFixed(2)})</div>`;
+      }).join('')
+    : '<div style="font-size:9px;color:var(--text-dim)">No relationships yet</div>';
+  document.getElementById('ap-rels').innerHTML = relsHtml;
+
+  document.getElementById('agent-panel').classList.add('visible');
+}
+
+function closeAgentPanel() {
+  document.getElementById('agent-panel').classList.remove('visible');
+  selectedAgent = null;
+}
+
+// ── Agents strip ──────────────────────────────────────────────────────────────
+function updateAgentsStrip(agents) {
+  const strip = document.getElementById('agents-strip');
+  strip.innerHTML = '';
+  agents.sort((a,b) => (b.wealth||0)-(a.wealth||0)).forEach(agent => {
+    const row = document.createElement('div');
+    row.className = 'agent-row';
+    row.onclick = () => openAgentPanel(agent.id);
+    const col = moodColor(agent);
+    const actionEmoji = {
+      forage:'🌿', speak:'💬', confront:'⚡', trade:'🔄',
+      give:'🎁', rest:'😴', wander:'〰', observe:'👁', retreat:'↩', claim:'🚩'
+    }[agent.last_action] || '•';
+    row.innerHTML = `
+      <div class="agent-row-dot" style="background:${col}"></div>
+      <div class="agent-row-name">${agent.name}</div>
+      <div class="agent-row-action">${actionEmoji} ${agent.last_phrase ? `"${agent.last_phrase.slice(0,30)}${agent.last_phrase.length>30?'…':''}"` : agent.last_action}</div>
+      <div class="agent-row-mood">${agent.mood_label || ''}</div>
+    `;
+    strip.appendChild(row);
+  });
+}
+
+// ── Relationship filter ───────────────────────────────────────────────────────
+function setRelFilter(f) {
+  relFilter = f;
+  document.querySelectorAll('.rtbtn').forEach(b => b.classList.remove('active'));
+  document.getElementById(`btn-${f === 'all' ? 'all' : f === 'allies' ? 'allies' : f === 'rivals' ? 'rivals' : 'none'}`).classList.add('active');
+  drawRelationships();
+}
+
+// ── Tick flash ────────────────────────────────────────────────────────────────
+function doTickFlash() {
+  const flash = document.getElementById('tick-flash');
+  flash.classList.add('flash');
+  setTimeout(() => flash.classList.remove('flash'), 200);
+}
+
+// ── Header stats ──────────────────────────────────────────────────────────────
+function updateHeader(snapshot) {
+  document.getElementById('h-tick').textContent = snapshot.tick;
+  document.getElementById('h-agents').textContent = (snapshot.agents||[]).length;
+  document.getElementById('h-events').textContent = state.totalEvents;
+  document.getElementById('h-trades').textContent = state.totalTrades;
+  document.getElementById('map-tick').textContent = `TICK ${snapshot.tick}`;
+  document.getElementById('event-count').textContent = `${state.totalEvents} EVENTS`;
+  document.getElementById('agent-count').textContent = (snapshot.agents||[]).length;
+}
+
+// ── Main snapshot handler ─────────────────────────────────────────────────────
+let lastTick = -1;
+
+function handleSnapshot(snapshot) {
+  const isNewTick = snapshot.tick > lastTick;
+  lastTick = snapshot.tick;
+  state.tick = snapshot.tick;
+
+  // Update agents
+  updateAgents(snapshot.agents || []);
+
+  // Update resources
+  updateResources(snapshot.resources || []);
+
+  // Events (only new ones)
+  if (isNewTick && snapshot.events) {
+    const tickEvents = snapshot.events.filter(e => e.tick === snapshot.tick);
+    tickEvents.forEach(addEvent);
+    showBubbles(tickEvents);
+    doTickFlash();
+  }
+
+  // Relationships
+  drawRelationships();
+
+  // Header
+  updateHeader(snapshot);
+
+  // Agents strip
+  updateAgentsStrip(snapshot.agents || []);
+
+  // Narrative
+  generateNarrative(snapshot);
+
+  // Update inspect panel if open
+  if (selectedAgent && state.agents[selectedAgent]) {
+    openAgentPanel(selectedAgent);
+  }
+}
+
+// ── WebSocket ─────────────────────────────────────────────────────────────────
+function connect() {
+  const dot = document.getElementById('conn-dot');
+  const label = document.getElementById('conn-label');
+  const overlay = document.getElementById('conn-overlay');
+
+  ws = new WebSocket(WS_URL);
+
+  ws.onopen = () => {
+    dot.classList.add('live');
+    label.textContent = 'LIVE';
+    overlay.classList.remove('visible');
+    console.log('Connected to simulation');
+  };
+
+  ws.onmessage = (e) => {
+    try {
+      const snapshot = JSON.parse(e.data);
+      handleSnapshot(snapshot);
+    } catch(err) {
+      console.error('Parse error:', err);
+    }
+  };
+
+  ws.onclose = () => {
+    dot.classList.remove('live');
+    label.textContent = 'DISCONNECTED';
+    overlay.classList.add('visible');
+    setTimeout(connect, RECONNECT_DELAY);
+  };
+
+  ws.onerror = () => {
+    ws.close();
+  };
+}
+
+// ── Resize handler ────────────────────────────────────────────────────────────
+function onResize() {
+  // Reposition all agents
+  Object.values(state.agents).forEach(agent => {
+    if (!agentElements[agent.id]) return;
+    const pos = toScreen(agent.x, agent.y);
+    agentElements[agent.id].dotWrap.style.left = pos.x + 'px';
+    agentElements[agent.id].dotWrap.style.top = pos.y + 'px';
+    agentElements[agent.id].label.style.left = pos.x + 'px';
+    agentElements[agent.id].label.style.top = (pos.y - 14) + 'px';
+  });
+
+  // Reposition resources
+  Object.entries(resourceElements).forEach(([name, el]) => {
+    const res = state.resources.find(r => r.name === name);
+    if (res) {
+      const pos = toScreen(res.x, res.y);
+      el.style.left = pos.x + 'px';
+      el.style.top = pos.y + 'px';
+    }
+  });
+  drawRelationships();
+}
+
+// ── Move agent labels/dots into map-area ──────────────────────────────────────
+document.addEventListener('DOMContentLoaded', () => {
+  const mapArea = document.getElementById('map-area');
+  mapArea.appendChild(document.getElementById('agent-labels'));
+  mapArea.appendChild(document.getElementById('agent-dots'));
+  mapArea.appendChild(document.getElementById('resource-nodes'));
+  mapArea.appendChild(document.getElementById('agent-panel'));
+
+  // Also keep chronicles in sidebar
+  document.getElementById('sidebar').insertBefore(
+    document.getElementById('chronicle'),
+    document.getElementById('sidebar').firstChild.nextSibling
+  );
+
+  window.addEventListener('resize', onResize);
+  connect();
+});
+</script>
+</body>
+</html>
