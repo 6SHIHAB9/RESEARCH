@@ -1,195 +1,286 @@
 import asyncio
 import logging
 import time
-from core.world import World
-from llm.router import run_tick
+
 from agents.agent import Agent
 from config import TICK_INTERVAL_SECONDS
+from core.world import World
+from llm.router import run_tick
 
 logger = logging.getLogger(__name__)
 
 _broadcast_callback = None
+
 
 def set_broadcast(callback):
     global _broadcast_callback
     _broadcast_callback = callback
 
 
-def _safe_float(v, default=0.0) -> float:
+def _safe_float(value, default=0.0) -> float:
     try:
-        return float(v)
+        return float(value)
     except (TypeError, ValueError):
         return default
 
 
-
 def _sanitize_items(items) -> dict:
-    """Ensure items is a flat {str: int} dict. LLM sometimes nests dicts."""
+    """Keep only positive integer item amounts."""
     if not isinstance(items, dict):
         return {}
     result = {}
-    for k, v in items.items():
-        if isinstance(v, (int, float)) and not isinstance(v, bool):
-            result[str(k)] = int(v)
-        # skip nested dicts/lists
+    for key, value in items.items():
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            continue
+        amount = int(value)
+        if amount > 0:
+            result[str(key)] = amount
     return result
+
+
+def _should_force_variety(agent: Agent, action: str) -> bool:
+    if action in {"forage", "wander", "trade", "give"}:
+        return agent.repeated_action_count(action, window=4) >= 3
+    return False
+
+
+def _ground_phrase(agent: Agent, phrase: str | None, target: Agent | None) -> str | None:
+    if not phrase:
+        return None
+
+    phrase = " ".join(str(phrase).split())[:180]
+    lower = phrase.lower()
+    risky_claims = ("stole", "betrayed", "lied", "attacked", "cheated", "took")
+    if not any(word in lower for word in risky_claims):
+        return phrase
+
+    evidence = " ".join(m.get("event", "") for m in agent.memory[-8:]).lower()
+    target_name = target.name.lower() if target else ""
+    has_evidence = any(word in evidence for word in risky_claims)
+    if target_name:
+        has_evidence = has_evidence and target_name in evidence
+    if has_evidence:
+        return phrase
+
+    return "I am suspicious, but I need proof."
+
 
 def apply_results(world: World, results: list):
     for agent_id, result in results:
         agent = world.agents.get(agent_id)
-        if not agent or not result:
-            if agent:
-                agent.move(0.5, 0.5)
-                agent.last_action = "wandering"
+        if not agent:
+            continue
+        if not result:
+            agent.move(0.5, 0.5)
+            agent.last_action = "wander"
+            agent.record_action(world.tick_number, "wander", False)
+            world.increment_metric("fallback_empty_result")
             continue
 
-        action        = result.get("action", "wander")
-        target_id     = result.get("target_id")
-        phrase        = result.get("phrase")
-        dx            = _safe_float(result.get("dx"), 0.0)
-        dy            = _safe_float(result.get("dy"), 0.0)
-        mood_delta    = _safe_float(result.get("mood_delta"), 0.0)
+        action = result.get("action", "wander")
+        target_id = result.get("target_id")
+        phrase = result.get("phrase")
+        dx = _safe_float(result.get("dx"), 0.0)
+        dy = _safe_float(result.get("dy"), 0.0)
+        mood_delta = _safe_float(result.get("mood_delta"), 0.0)
         resource_name = result.get("resource_name")
-        give_items    = result.get("give_items") or {}
+        give_items = result.get("give_items") or {}
         receive_items = result.get("receive_items") or {}
-        craft_a       = result.get("craft_a")
-        craft_b       = result.get("craft_b")
-        memory_note   = result.get("memory_note")
-        rel_updates   = result.get("rel_updates") or {}
-
+        craft_a = result.get("craft_a")
+        craft_b = result.get("craft_b")
+        project_id = result.get("project_id")
+        memory_note = result.get("memory_note")
+        rel_updates = result.get("rel_updates") or {}
         target = world.agents.get(target_id) if target_id else None
 
-        # ── Movement ──────────────────────────────────────────────────────────
+        if _should_force_variety(agent, action):
+            world.log_failed_action(agent, action, "repetition_cooldown", target)
+            action = "observe" if target else "wander"
+            if action == "wander":
+                dx = -0.5 * dx or 0.7
+                dy = -0.5 * dy or -0.4
+
         if action == "retreat" and target:
             flee_dx = agent.x - target.x
             flee_dy = agent.y - target.y
-            dist = max(0.1, (flee_dx**2 + flee_dy**2)**0.5)
+            dist = max(0.1, (flee_dx**2 + flee_dy**2) ** 0.5)
             dx = (flee_dx / dist) * 2.0
             dy = (flee_dy / dist) * 2.0
         elif action == "speak" and target:
             toward_dx = target.x - agent.x
             toward_dy = target.y - agent.y
-            dist = max(0.1, (toward_dx**2 + toward_dy**2)**0.5)
+            dist = max(0.1, (toward_dx**2 + toward_dy**2) ** 0.5)
             if dist > 2:
                 dx = (toward_dx / dist) * 1.0
                 dy = (toward_dy / dist) * 1.0
 
         agent.move(dx, dy)
 
-        # ── Needs from action ─────────────────────────────────────────────────
+        success = True
+        failure_reason = ""
+        logged_success = False
+
         if action == "rest":
             agent.needs.energy = min(1.0, agent.needs.energy + 0.2)
             agent.needs.loneliness = min(1.0, agent.needs.loneliness + 0.05)
-        elif action == "speak" and target:
-            agent.needs.loneliness = max(0.0, agent.needs.loneliness - 0.15)
-        elif action == "forage" and resource_name:
-            world.harvest(agent, resource_name)
-        elif action == "claim" and resource_name:
-            world.claim_resource(agent, resource_name)
-        elif action == "craft" and craft_a and craft_b:
-            result_item = world.attempt_craft(agent, craft_a, craft_b)
-            if result_item:
-                logger.info(f"  🔨 {agent.name} crafted {result_item} from {craft_a}+{craft_b}!")
-        elif action == "trade" and target and give_items and receive_items:
+        elif action == "speak":
+            if not target:
+                success = False
+                failure_reason = "missing_or_invalid_target"
+            else:
+                phrase = _ground_phrase(agent, phrase, target)
+                agent.needs.loneliness = max(0.0, agent.needs.loneliness - 0.15)
+        elif action == "forage":
+            success = bool(resource_name) and world.harvest(agent, resource_name)
+            failure_reason = "resource_unavailable_or_too_far"
+        elif action == "claim":
+            success = bool(resource_name) and world.claim_resource(agent, resource_name)
+            failure_reason = "resource_unavailable_or_too_far"
+            logged_success = success
+        elif action == "craft":
+            success = bool(craft_a and craft_b)
+            result_item = world.attempt_craft(agent, craft_a, craft_b) if success else None
+            success = bool(result_item)
+            failure_reason = "missing_items_or_unknown_recipe"
+            if success:
+                logger.info(f"  [craft] {agent.name} crafted {result_item} from {craft_a}+{craft_b}")
+        elif action == "build":
+            success = world.contribute_to_project(agent, project_id)
+            failure_reason = "no_project_or_no_materials"
+            if success:
+                logger.info(f"  [build] {agent.name} contributed to a camp project")
+        elif action == "trade":
             give_items = _sanitize_items(give_items)
             receive_items = _sanitize_items(receive_items)
-            if give_items and receive_items:
-                success = world.execute_trade(agent, target, give_items, receive_items)
-                if success:
-                    logger.info(f"  🔄 {agent.name} traded {give_items} to {target.name} for {receive_items}")
-        elif action == "give" and target and give_items:
-            give_items = _sanitize_items(give_items)
-            success = world.execute_trade(agent, target, give_items, {}) if give_items else False
+            success = bool(target and give_items and receive_items)
             if success:
-                agent.update_rel(target_id, trust=0.08, love=0.05)
-                target.update_rel(agent_id, trust=0.1, love=0.08, debt=-0.1)
-                target.nudge_mood(0.15)
-                logger.info(f"  🎁 {agent.name} gave {give_items} to {target.name}")
-        elif action == "confront" and target:
-            agent.needs.anger = max(0.0, agent.needs.anger - 0.1)
-            target.needs.fear = min(1.0, target.needs.fear + 0.2)
-            agent.update_rel(target_id, rivalry=0.05)
-            target.update_rel(agent_id, fear=0.1, trust=-0.05)
+                success = world.execute_trade(agent, target, give_items, receive_items)
+            failure_reason = "invalid_trade_or_missing_inventory"
+            logged_success = success
+            if success:
+                logger.info(f"  [trade] {agent.name} traded {give_items} to {target.name} for {receive_items}")
+        elif action == "give":
+            give_items = _sanitize_items(give_items)
+            success = bool(target and give_items)
+            if success:
+                success = world.give_items(agent, target, give_items)
+            failure_reason = "invalid_gift_or_missing_inventory"
+            logged_success = success
+            if success:
+                logger.info(f"  [give] {agent.name} gave {give_items} to {target.name}")
+        elif action == "confront":
+            if not target:
+                success = False
+                failure_reason = "missing_or_invalid_target"
+            else:
+                agent.needs.anger = max(0.0, agent.needs.anger - 0.1)
+                target.needs.fear = min(1.0, target.needs.fear + 0.2)
+                agent.update_rel(target_id, rivalry=0.05)
+                target.update_rel(agent_id, fear=0.1, trust=-0.05)
+        elif action in {"retreat", "observe", "wander", "ignore"}:
+            success = True
+        else:
+            success = False
+            failure_reason = "unknown_action"
 
-        # ── Mood ──────────────────────────────────────────────────────────────
         agent.nudge_mood(mood_delta)
 
-        # ── Phrase ────────────────────────────────────────────────────────────
-        if phrase and action == "speak":
+        if phrase and action == "speak" and success:
             agent.last_phrase = phrase
 
-        # ── Relationships — safe_float every value ────────────────────────────
-        if isinstance(rel_updates, dict):
+        if success and isinstance(rel_updates, dict):
             for rel_target_id, updates in rel_updates.items():
                 if rel_target_id in world.agents and isinstance(updates, dict):
-                    agent.update_rel(rel_target_id,
-                        trust   = _safe_float(updates.get("trust"),   0.0),
-                        love    = _safe_float(updates.get("love"),    0.0),
-                        rivalry = _safe_float(updates.get("rivalry"), 0.0),
-                        fear    = _safe_float(updates.get("fear"),    0.0),
-                        debt    = _safe_float(updates.get("debt"),    0.0),
+                    agent.update_rel(
+                        rel_target_id,
+                        trust=_safe_float(updates.get("trust"), 0.0),
+                        love=_safe_float(updates.get("love"), 0.0),
+                        rivalry=_safe_float(updates.get("rivalry"), 0.0),
+                        fear=_safe_float(updates.get("fear"), 0.0),
+                        debt=_safe_float(updates.get("debt"), 0.0),
                     )
 
-        # ── Memory ────────────────────────────────────────────────────────────
-        if memory_note:
+        if success and memory_note:
             agent.remember(world.tick_number, str(memory_note))
 
+        if not success:
+            world.log_failed_action(agent, action, failure_reason or "rejected", target)
+            agent.nudge_mood(-0.03)
+            if action in {"trade", "give", "craft", "build", "forage", "claim"}:
+                action = "observe" if target else "wander"
+
         agent.last_action = action
-        _log_action(world, agent, action, phrase, target, dx, dy)
+        agent.record_action(world.tick_number, action, success)
+        world.increment_metric(f"action_{action}")
+        if success:
+            world.increment_metric("successful_actions")
+        else:
+            world.increment_metric("failed_actions")
+        _log_action(world, agent, action, phrase, target, dx, dy, success, logged_success)
 
 
-def _log_action(world, agent, action, phrase, target, dx, dy):
+def _log_action(world, agent, action, phrase, target, dx, dy, success=True, already_logged=False):
+    if not success:
+        logger.info(f"  [x] {agent.name} failed {action}")
+        return
+
     tname = target.name if target else ""
-
     if action == "speak" and phrase:
-        logger.info(f"  💬 {agent.name} → {tname or '(alone)'}: \"{phrase}\"")
-        world.log("speech", {"agent": agent.name, "agent_id": agent.id,
-                              "target": tname, "target_id": target.id if target else None,
-                              "phrase": phrase})
+        logger.info(f"  [say] {agent.name} -> {tname or '(alone)'}: \"{phrase}\"")
+        world.log("speech", {
+            "agent": agent.name,
+            "agent_id": agent.id,
+            "target": tname,
+            "target_id": target.id if target else None,
+            "phrase": phrase,
+        })
     elif action == "confront":
-        logger.info(f"  ⚡ {agent.name} confronted {tname}")
+        logger.info(f"  [fight] {agent.name} confronted {tname}")
         world.log("confrontation", {"agent": agent.name, "agent_id": agent.id, "target": tname})
     elif action == "retreat":
-        logger.info(f"  ↩  {agent.name} retreated from {tname or 'threat'}")
+        logger.info(f"  [back] {agent.name} retreated from {tname or 'threat'}")
     elif action == "rest":
-        logger.info(f"  😴 {agent.name} resting")
+        logger.info(f"  [rest] {agent.name} resting")
     elif action == "observe":
-        logger.info(f"  👁  {agent.name} watching {tname or '...'}")
+        logger.info(f"  [watch] {agent.name} watching {tname or '...'}")
     elif action == "forage":
-        logger.info(f"  🌿 {agent.name} foraging")
+        logger.info(f"  [forage] {agent.name} foraging")
     elif action == "wander":
-        logger.info(f"  〰  {agent.name} wandering ({dx:+.1f}, {dy:+.1f})")
+        logger.info(f"  [move] {agent.name} wandering ({dx:+.1f}, {dy:+.1f})")
     elif action == "ignore":
-        logger.info(f"  —  {agent.name} ignoring {tname}")
-    elif action == "give":
-        logger.info(f"  🎁 {agent.name} giving to {tname}")
-    elif action == "trade":
-        logger.info(f"  🔄 {agent.name} trading with {tname}")
+        logger.info(f"  [ignore] {agent.name} ignoring {tname}")
+    elif action == "give" and not already_logged:
+        logger.info(f"  [give] {agent.name} gave to {tname}")
+    elif action == "trade" and not already_logged:
+        logger.info(f"  [trade] {agent.name} traded with {tname}")
     elif action == "claim":
-        logger.info(f"  🚩 {agent.name} claiming territory")
+        logger.info(f"  [claim] {agent.name} claiming territory")
     elif action == "craft":
-        logger.info(f"  🔨 {agent.name} crafting")
+        logger.info(f"  [craft] {agent.name} crafting")
+    elif action == "build":
+        logger.info(f"  [build] {agent.name} building")
 
     if target:
         rel = agent.get_rel(target.id)
         if rel.encounters > 0 and rel.encounters % 5 == 0:
             bond = rel.bond_score()
             if abs(bond) > 0.3:
-                emoji = "🤝" if bond > 0 else "⚔️"
-                logger.info(f"  {emoji} {agent.name} ↔ {tname}: {rel.label()} (bond={bond:.2f}, enc={rel.encounters})")
+                logger.info(f"  [bond] {agent.name} <-> {tname}: {rel.label()} (bond={bond:.2f}, enc={rel.encounters})")
 
 
 async def simulation_loop(world: World):
-    logger.info("🌍 Civilization awakening...")
-    logger.info(f"⚙️  Tick interval: {TICK_INTERVAL_SECONDS}s | Agents: {len(world.agents)}")
+    logger.info("Civilization awakening...")
+    logger.info(f"Tick interval: {TICK_INTERVAL_SECONDS}s | Agents: {len(world.agents)}")
 
     while True:
         tick_start = time.time()
         world.tick_number += 1
-        logger.info(f"━━━ TICK {world.tick_number} ━━━")
+        logger.info(f"--- TICK {world.tick_number} ---")
 
+        world.tick_environment()
         world.tick_needs()
         world.tick_resources()
+        world.tick_society()
         world.tick_social_status()
 
         try:
@@ -205,5 +296,5 @@ async def simulation_loop(world: World):
                 logger.error(f"  Broadcast error: {e}")
 
         elapsed = time.time() - tick_start
-        logger.info(f"✓ Tick {world.tick_number} complete ({elapsed:.1f}s)")
+        logger.info(f"Tick {world.tick_number} complete ({elapsed:.1f}s)")
         await asyncio.sleep(max(0, TICK_INTERVAL_SECONDS - elapsed))

@@ -15,10 +15,11 @@ class ResourceNode:
     claimed_by: str = None      # agent_id or None
     _counter: int = 0
 
-    def tick(self):
+    def tick(self, resource_modifier: float = 1.0):
         if self.amount < self.max_amount:
             self._counter += 1
-            if self._counter >= self.replenish_every:
+            threshold = max(1, round(self.replenish_every / max(0.2, resource_modifier)))
+            if self._counter >= threshold:
                 self.amount = min(self.max_amount, self.amount + 1)
                 self._counter = 0
 

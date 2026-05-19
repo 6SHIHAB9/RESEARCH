@@ -11,9 +11,6 @@ CEREBRAS_API_KEYS = [
 ]
 CEREBRAS_API_KEYS = [k for k in CEREBRAS_API_KEYS if k]
 
-if not CEREBRAS_API_KEYS:
-    raise RuntimeError("No API keys found. Set CEREBRAS_API_KEY_1 (and optionally _2, _3) in .env")
-
 CEREBRAS_BASE_URL = "https://api.cerebras.ai/v1"
 
 # llama3.1-8b  — fast, reliable, free tier works fine, ~2300 tok/s

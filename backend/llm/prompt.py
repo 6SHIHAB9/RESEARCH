@@ -40,6 +40,11 @@ def build_agent_prompt(agent: Agent, world: World) -> str:
 
     # Known recipes
     known_recipes = world.crafting.known_recipes(agent.id)
+    home_group = world.groups.get(agent.home_group) if agent.home_group else None
+    active_projects = [
+        p.to_dict(world) for p in world.projects
+        if not p.complete and (not agent.home_group or p.group_id == agent.home_group)
+    ][:3]
 
     # Crisis state
     crisis = agent.needs.crisis()
@@ -56,9 +61,19 @@ def build_agent_prompt(agent: Agent, world: World) -> str:
         "inventory": {k: v for k, v in agent.inventory.items() if v > 0},
         "wealth": agent.wealth(),
         "territory_claim": agent.territory_claim,
+        "home_group": home_group.to_dict(world) if home_group else None,
         "social_status": agent.social_status,
+        "reputation": round(agent.reputation, 2),
         "known_recipes": known_recipes,
+        "active_projects": active_projects,
+        "weather": world.weather.to_dict(),
+        "recent_rumors": [
+            {"summary": r["summary"], "heard_count": len(r["heard_by"])}
+            for r in world.society.rumors[-5:]
+            if agent.id in r["heard_by"]
+        ],
         "recent_memories": agent.recent_memories(6),
+        "recent_actions": agent.action_history[-6:],
         "nearby_agents": nearby_info,
         "nearby_resources": resource_info,
         "last_action": agent.last_action,
@@ -91,6 +106,7 @@ ACTIONS available:
 - claim: stake territory over a resource
 - trade: offer items to someone nearby
 - craft: combine two items you carry (wood+stone=tool, herbs+water=medicine, fish+herbs=preserved_food)
+- build: contribute wood/stone to your camp's active project
 - rest: recover energy
 - wander: move through the world
 - observe: watch someone or something carefully
@@ -107,12 +123,15 @@ PERSONALITY RULES — this is who you are:
 - High loyalty: protect allies, punish those who hurt them
 - High patience: play long games, don't react impulsively
 - Low courage: avoid confrontation, retreat when threatened
+- Group members should help their camp survive, contribute to projects, and share when cohesion is high
+- Avoid repeating the same action over and over unless a crisis forces it
 
 MEMORY RULES:
 - If someone in your memories is nearby, you MUST reference your history with them
 - Debts are real — if someone owes you, collect. If you owe someone, it weighs on you.
 - Grudges don't fade fast. Betrayals are remembered.
 - Love and friendship are earned through repeated positive contact.
+- Do not accuse someone of stealing, lying, betrayal, or violence unless that exact claim appears in memories or rumors.
 
 CRISIS RULES:
 - If starving or dehydrated: finding food/water is your ONLY priority
@@ -124,7 +143,14 @@ SPEECH RULES:
 - Max 15 words per phrase
 - No greetings, no filler. Every word must mean something.
 - Reference specific names, specific memories, specific debts.
+- If you are uncertain, say uncertainty. Do not invent crimes or promises.
 - Emotions drive speech: desperation, anger, warmth, suspicion, love, fear.
+
+TRANSACTION RULES:
+- Trade must include positive nonzero give_items and positive nonzero receive_items.
+- Give must include positive nonzero give_items and no receive_items.
+- Never offer items you do not carry.
+- If a transaction is impossible, choose speak, observe, forage, rest, or wander instead.
 
 Respond with ONLY this JSON object (no explanation, no markdown):
 {{
@@ -139,6 +165,7 @@ Respond with ONLY this JSON object (no explanation, no markdown):
   "receive_items": {{"item": amount}} or null,
   "craft_a": "item name or null",
   "craft_b": "item name or null",
+  "project_id": "project id if action is build, otherwise null",
   "memory_note": "one sentence under 15 words about what just happened, or null",
   "rel_updates": {{
     "target_id": {{

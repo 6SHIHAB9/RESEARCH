@@ -6,7 +6,7 @@ logger = logging.getLogger(__name__)
 
 VALID_ACTIONS = [
     "speak", "forage", "claim", "trade", "craft",
-    "rest", "wander", "observe", "confront", "retreat", "give", "ignore"
+    "build", "rest", "wander", "observe", "confront", "retreat", "give", "ignore"
 ]
 
 
@@ -75,6 +75,7 @@ def parse_agent_response(raw: str, agent_id: str, valid_target_ids: list) -> dic
         "receive_items": data.get("receive_items") or {},
         "craft_a":       data.get("craft_a"),
         "craft_b":       data.get("craft_b"),
+        "project_id":    data.get("project_id"),
         "memory_note":   data.get("memory_note"),
         "rel_updates":   data.get("rel_updates") or {},
     }

@@ -121,12 +121,15 @@ class Agent:
 
     # Memory: list of {tick, event} dicts
     memory: list = field(default_factory=list)
+    action_history: list = field(default_factory=list)
 
     # Status
     last_action: str     = "wandering"
     last_phrase: str      = ""
     social_status: float  = 0.5   # emergent, 0=outcast 1=leader
     territory_claim: str  = None
+    home_group: str       = None
+    reputation: float     = 0.0
     alive: bool           = True
     born_at_tick: int     = 0
 
@@ -142,6 +145,14 @@ class Agent:
         self.memory.append({"tick": tick, "event": event})
         if len(self.memory) > 20:
             self.memory = self.memory[-20:]
+
+    def record_action(self, tick: int, action: str, success: bool = True):
+        self.action_history.append({"tick": tick, "action": action, "success": success})
+        if len(self.action_history) > 12:
+            self.action_history = self.action_history[-12:]
+
+    def repeated_action_count(self, action: str, window: int = 5) -> int:
+        return sum(1 for item in self.action_history[-window:] if item["action"] == action)
 
     def recent_memories(self, n: int = 5) -> list[str]:
         return [m["event"] for m in self.memory[-n:]]
@@ -191,8 +202,11 @@ class Agent:
             "wealth": self.wealth(),
             "social_status": round(self.social_status, 2),
             "territory_claim": self.territory_claim,
+            "home_group": self.home_group,
+            "reputation": round(self.reputation, 2),
             "last_action": self.last_action,
             "last_phrase": self.last_phrase,
+            "action_history": self.action_history[-6:],
             "traits": self.traits,
             "backstory": self.backstory,
             "top_relationships": self.top_relationships(),

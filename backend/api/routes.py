@@ -126,6 +126,56 @@ async def get_economy():
     }
 
 
+@router.get("/society")
+async def get_society():
+    if not _world_ref:
+        return JSONResponse({"error": "not ready"}, status_code=503)
+    return {
+        "weather": _world_ref.weather.to_dict(),
+        "groups": [g.to_dict(_world_ref) for g in _world_ref.groups.values()],
+        "projects": [p.to_dict(_world_ref) for p in _world_ref.projects],
+        "rumors": [
+            {
+                "tick": r["tick"],
+                "type": r["type"],
+                "summary": r["summary"],
+                "heard_count": len(r["heard_by"]),
+                "heat": r["heat"],
+            }
+            for r in _world_ref.society.rumors[-50:]
+        ],
+    }
+
+
+@router.get("/groups")
+async def get_groups():
+    if not _world_ref:
+        return JSONResponse({"error": "not ready"}, status_code=503)
+    return [g.to_dict(_world_ref) for g in _world_ref.groups.values()]
+
+
+@router.get("/projects")
+async def get_projects():
+    if not _world_ref:
+        return JSONResponse({"error": "not ready"}, status_code=503)
+    return [p.to_dict(_world_ref) for p in _world_ref.projects]
+
+
+@router.get("/metrics")
+async def get_metrics():
+    if not _world_ref:
+        return JSONResponse({"error": "not ready"}, status_code=503)
+    return {
+        "tick": _world_ref.tick_number,
+        "metrics": dict(sorted(_world_ref.metrics.items())),
+        "alive_agents": len([a for a in _world_ref.agents.values() if a.alive]),
+        "event_count": len(_world_ref.events),
+        "groups": len(_world_ref.groups),
+        "projects": len(_world_ref.projects),
+        "weather": _world_ref.weather.to_dict(),
+    }
+
+
 def _get_inventory_totals() -> dict:
     totals = {}
     for agent in _world_ref.agents.values():

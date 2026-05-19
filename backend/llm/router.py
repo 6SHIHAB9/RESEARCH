@@ -34,9 +34,11 @@ def _max_calls_this_tick() -> int:
     How many individual LLM calls can we safely fire this tick?
     Based on tick interval and number of keys.
     """
+    if not CEREBRAS_API_KEYS:
+        return 0
     total_req_per_min = REQUESTS_PER_MIN_PER_KEY * len(CEREBRAS_API_KEYS)
     safe_per_tick = math.floor(total_req_per_min * (TICK_INTERVAL_SECONDS / 60))
-    # Cap at total agent count, floor at 1
+    # Cap at total agent count, floor at 1 when at least one key exists.
     return max(1, min(safe_per_tick, 20))
 
 
@@ -46,6 +48,8 @@ _clients: list[AsyncOpenAI] = []
 
 def _get_clients() -> list[AsyncOpenAI]:
     global _clients
+    if not CEREBRAS_API_KEYS:
+        return []
     if not _clients:
         _clients = [
             AsyncOpenAI(api_key=key, base_url=CEREBRAS_BASE_URL)
@@ -125,7 +129,8 @@ def _fallback_action(agent: Agent, world: World) -> dict:
     base = {
         "target_id": None, "phrase": None, "mood_delta": 0,
         "resource_name": None, "give_items": {}, "receive_items": {},
-        "craft_a": None, "craft_b": None, "memory_note": None, "rel_updates": {}
+        "craft_a": None, "craft_b": None, "project_id": None,
+        "memory_note": None, "rel_updates": {}
     }
 
     # Crisis: starving → seek food
@@ -155,13 +160,31 @@ def _fallback_action(agent: Agent, world: World) -> dict:
     if needs.energy < 0.2:
         return {**base, "action": "rest", "dx": 0, "dy": 0, "mood_delta": 0.05}
 
+    # Camp members with materials help shared projects.
+    if (
+        agent.home_group
+        and agent.repeated_action_count("build", window=4) < 2
+        and (agent.inventory.get("wood", 0) > 0 or agent.inventory.get("stone", 0) > 0)
+    ):
+        project = next(
+            (p for p in world.projects if p.group_id == agent.home_group and not p.complete),
+            None,
+        )
+        if project:
+            return {**base, "action": "build", "project_id": project.id, "dx": 0, "dy": 0}
+
     # Lonely → drift toward nearest agent
     if needs.loneliness > 0.7 and nearby_agents:
         closest = min(nearby_agents, key=lambda a: (a.x - agent.x)**2 + (a.y - agent.y)**2)
         dx, dy = toward(closest.x, closest.y)
-        return {**base, "action": "wander", "dx": dx, "dy": dy}
+        if agent.repeated_action_count("wander", window=4) >= 3:
+            return {**base, "action": "observe", "target_id": closest.id, "dx": 0, "dy": 0}
+        return {**base, "action": "wander", "target_id": closest.id, "dx": dx, "dy": dy}
 
     # Default: wander
+    if agent.repeated_action_count("wander", window=4) >= 3 and nearby_agents:
+        closest = min(nearby_agents, key=lambda a: (a.x - agent.x)**2 + (a.y - agent.y)**2)
+        return {**base, "action": "observe", "target_id": closest.id, "dx": 0, "dy": 0}
     return {**base, "action": "wander",
             "dx": random.uniform(-1.0, 1.0),
             "dy": random.uniform(-1.0, 1.0)}
@@ -221,6 +244,12 @@ async def run_tick(world: World) -> list[tuple[str, dict | None]]:
     clients = _get_clients()
     max_calls = _max_calls_this_tick()
     llm_agents, fallback_agents = _select_agents(world)
+    if not clients:
+        logger.info("  No API keys configured; using deterministic fallback for every agent")
+        return [
+            (agent.id, _fallback_action(agent, world))
+            for agent in llm_agents + fallback_agents
+        ]
 
     logger.info(f"  → LLM calls: {max_calls} (tick={TICK_INTERVAL_SECONDS}s, keys={len(clients)})")
     logger.info(f"  → LLM: {[a.name for a in llm_agents]}")
