@@ -257,8 +257,17 @@ async def run_tick(world: World) -> list[tuple[str, dict | None]]:
         logger.info(f"  → Fallback: {[a.name for a in fallback_agents]}")
 
     # Fire all LLM agents in parallel, rotating keys
+    # Stagger calls across the tick window to avoid rate limit bursts
+    # Spread calls over 60% of the tick interval, leaving headroom
+    stagger_window = TICK_INTERVAL_SECONDS * 0.6
+    delay_between = stagger_window / max(len(llm_agents), 1)
+
+    async def _staggered_call(i, agent):
+        await asyncio.sleep(i * delay_between)
+        return await _call_agent(agent, world, clients[i % len(clients)])
+
     tasks = [
-        _call_agent(agent, world, clients[i % len(clients)])
+        _staggered_call(i, agent)
         for i, agent in enumerate(llm_agents)
     ]
     llm_results = await asyncio.gather(*tasks)
