@@ -38,6 +38,15 @@ def sanitize(raw: str) -> str:
     raw = re.sub(r'\\(?!["\\/bfnrtu])', r'\\\\', raw)
     # Fix trailing commas
     raw = re.sub(r',\s*([\]}])', r'\1', raw)
+    # FIX: repair unescaped double quotes inside string values
+    # e.g. "phrase": "he said "hello" to me" → "phrase": "he said \"hello\" to me"
+    def fix_inner_quotes(m):
+        key = m.group(1)
+        value = m.group(2)
+        # Escape any unescaped quotes inside the value
+        value = re.sub(r'(?<!\\)"', '\\"', value)
+        return f'"{key}": "{value}"'
+    raw = re.sub(r'"(\w+)":\s*"(.*?)"(?=\s*[,\}])', fix_inner_quotes, raw, flags=re.DOTALL)
     return raw
 
 
@@ -51,9 +60,12 @@ def parse_agent_response(raw: str, agent_id: str, valid_target_ids: list) -> dic
         clean = sanitize(raw)
         data = json.loads(clean)
     except json.JSONDecodeError as e:
-        logger.error(f"  Parse error for {agent_id}: {e}")
-        logger.debug(f"  Raw: {raw[:200]}")
-        return None
+        # FIX: last resort — try extracting just the fields we need with regex
+        logger.warning(f"  Parse error for {agent_id}: {e} — trying field extraction")
+        data = _extract_fields(raw)
+        if not data:
+            logger.error(f"  Could not recover JSON for {agent_id}")
+            return None
 
     # Validate target
     raw_target = data.get("target_id")
@@ -78,4 +90,42 @@ def parse_agent_response(raw: str, agent_id: str, valid_target_ids: list) -> dic
         "project_id":    data.get("project_id"),
         "memory_note":   data.get("memory_note"),
         "rel_updates":   data.get("rel_updates") or {},
+    }
+
+
+def _extract_fields(raw: str) -> dict | None:
+    """
+    FIX: Last-resort field extractor when JSON is broken beyond sanitization.
+    Pulls scalar fields out with regex — good enough for action/dx/dy/phrase.
+    """
+    def get_str(key):
+        m = re.search(rf'"{key}"\s*:\s*"([^"]*)"', raw)
+        return m.group(1) if m else None
+
+    def get_num(key):
+        m = re.search(rf'"{key}"\s*:\s*(-?[\d.]+)', raw)
+        try:
+            return float(m.group(1)) if m else None
+        except ValueError:
+            return None
+
+    action = get_str("action")
+    if not action:
+        return None  # Can't do anything without an action
+
+    return {
+        "action":        action,
+        "target_id":     get_str("target_id"),
+        "phrase":        get_str("phrase"),
+        "dx":            get_num("dx") or 0.0,
+        "dy":            get_num("dy") or 0.0,
+        "mood_delta":    get_num("mood_delta") or 0.0,
+        "resource_name": get_str("resource_name"),
+        "give_items":    {},
+        "receive_items": {},
+        "craft_a":       get_str("craft_a"),
+        "craft_b":       get_str("craft_b"),
+        "project_id":    get_str("project_id"),
+        "memory_note":   get_str("memory_note"),
+        "rel_updates":   {},
     }

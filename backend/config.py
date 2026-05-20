@@ -19,8 +19,8 @@ CEREBRAS_BASE_URL = "https://api.cerebras.ai/v1"
 MODEL = "llama3.1-8b"
 
 # ── Simulation ────────────────────────────────────────────────────────────────
-TICK_INTERVAL_SECONDS = int(os.getenv("TICK_INTERVAL_SECONDS", "20"))
-AGENT_COUNT = 12
+TICK_INTERVAL_SECONDS = int(os.getenv("TICK_INTERVAL_SECONDS", "300"))
+AGENT_COUNT = 6
 AGENTS_PER_KEY = 4
 
 # ── World ─────────────────────────────────────────────────────────────────────
@@ -52,5 +52,5 @@ CRAFTING_RECIPES = {
 }
 
 # ── Limits ────────────────────────────────────────────────────────────────────
-MAX_EVENTS       = 500
-MAX_AGENT_MEMORY = 20
+MAX_EVENTS       = 80
+MAX_AGENT_MEMORY = 30

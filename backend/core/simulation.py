@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import random
 import time
 
 from agents.agent import Agent
@@ -39,8 +40,9 @@ def _sanitize_items(items) -> dict:
 
 
 def _should_force_variety(agent: Agent, action: str) -> bool:
+    # Only throttle actions that cause real problems when spammed
     if action in {"forage", "wander", "trade", "give"}:
-        return agent.repeated_action_count(action, window=4) >= 3
+        return agent.repeated_action_count(action, window=5) >= 4
     return False
 
 
@@ -65,23 +67,38 @@ def _ground_phrase(agent: Agent, phrase: str | None, target: Agent | None) -> st
     return "I am suspicious, but I need proof."
 
 
+def _center_seeking_wander(agent: Agent) -> tuple[float, float]:
+    """
+    FIX: When forced to wander (repetition cooldown or boundary),
+    steer toward world center (30, 30) with some randomness.
+    Prevents agents from getting stuck against boundaries.
+    """
+    center_x, center_y = 30.0, 30.0
+    dx = (center_x - agent.x) * 0.15 + random.uniform(-0.6, 0.6)
+    dy = (center_y - agent.y) * 0.15 + random.uniform(-0.6, 0.6)
+    return dx, dy
+
+
 def apply_results(world: World, results: list):
     for agent_id, result in results:
         agent = world.agents.get(agent_id)
         if not agent:
             continue
         if not result:
-            agent.move(0.5, 0.5)
+            # FIX: use center-seeking wander for empty results too
+            dx, dy = _center_seeking_wander(agent)
+            agent.move(dx, dy)
             agent.last_action = "wander"
-            agent.record_action(world.tick_number, "wander", False)
+            # FIX: don't record fallback wanders in action_history
+            # so they don't trigger the repeat cooldown
             world.increment_metric("fallback_empty_result")
             continue
 
         action = result.get("action", "wander")
         target_id = result.get("target_id")
         phrase = result.get("phrase")
-        dx = _safe_float(result.get("dx"), 0.0)
-        dy = _safe_float(result.get("dy"), 0.0)
+        dx = max(-2.0, min(2.0, _safe_float(result.get("dx"), 0.0)))
+        dy = max(-2.0, min(2.0, _safe_float(result.get("dy"), 0.0)))
         mood_delta = _safe_float(result.get("mood_delta"), 0.0)
         resource_name = result.get("resource_name")
         give_items = result.get("give_items") or {}
@@ -94,11 +111,39 @@ def apply_results(world: World, results: list):
         target = world.agents.get(target_id) if target_id else None
 
         if _should_force_variety(agent, action):
-            world.log_failed_action(agent, action, "repetition_cooldown", target)
-            action = "observe" if target else "wander"
-            if action == "wander":
-                dx = -0.5 * dx or 0.7
-                dy = -0.5 * dy or -0.4
+            # FIX: silent redirect — don't log as failure, just change the action
+            if action == "observe" and target:
+                # Try a different target instead of same one again
+                other_targets = [
+                    a for a in world.nearby_agents(agent)
+                    if a.id != target_id
+                ]
+                if other_targets:
+                    target = random.choice(other_targets)
+                    target_id = target.id
+                    action = "observe"
+                else:
+                    # No other target — wander toward nearest resource instead
+                    action = "wander"
+                    dx, dy = _center_seeking_wander(agent)
+            elif action == "wander":
+                # FIX: keep moving but pick a smarter direction
+                # Head toward nearest resource if hungry/thirsty, else toward center
+                nearby_resources = world.nearby_resources(agent)
+                nearest = None
+                if agent.needs.hunger > 0.5:
+                    nearest = world.nearest_resource(agent, "berries") or world.nearest_resource(agent, "fish")
+                elif agent.needs.thirst > 0.5:
+                    nearest = world.nearest_resource(agent, "water")
+                if nearest:
+                    dist = max(0.1, ((nearest.x - agent.x)**2 + (nearest.y - agent.y)**2)**0.5)
+                    dx = ((nearest.x - agent.x) / dist) * 1.5
+                    dy = ((nearest.y - agent.y) / dist) * 1.5
+                else:
+                    dx, dy = _center_seeking_wander(agent)
+            else:
+                action = "wander"
+                dx, dy = _center_seeking_wander(agent)
 
         if action == "retreat" and target:
             flee_dx = agent.x - target.x
@@ -178,6 +223,16 @@ def apply_results(world: World, results: list):
                 agent.update_rel(target_id, rivalry=0.05)
                 target.update_rel(agent_id, fear=0.1, trust=-0.05)
         elif action in {"retreat", "observe", "wander", "ignore"}:
+            # FIX: observe with no target is meaningless — redirect to wander toward nearest agent
+            if action == "observe" and not target:
+                nearby = world.nearby_agents(agent)
+                if nearby:
+                    closest = min(nearby, key=lambda a: (a.x - agent.x)**2 + (a.y - agent.y)**2)
+                    target = closest
+                    target_id = closest.id
+                else:
+                    action = "wander"
+                    dx, dy = _center_seeking_wander(agent)
             success = True
         else:
             success = False
@@ -203,20 +258,28 @@ def apply_results(world: World, results: list):
         if success and memory_note:
             agent.remember(world.tick_number, str(memory_note))
 
+        original_action = action  # save before potential redirect
+
         if not success:
-            world.log_failed_action(agent, action, failure_reason or "rejected", target)
+            world.log_failed_action(agent, original_action, failure_reason or "rejected", target)
             agent.nudge_mood(-0.03)
-            if action in {"trade", "give", "craft", "build", "forage", "claim"}:
+            # Inject a memory note so the LLM sees the failure next tick and stops repeating
+            if original_action in {"trade", "give"}:
+                tname = target.name if target else "someone"
+                agent.remember(world.tick_number, f"My {original_action} with {tname} failed — I lacked items or they refused.")
+            elif original_action == "forage":
+                agent.remember(world.tick_number, "I tried to forage but found nothing here.")
+            if original_action in {"trade", "give", "craft", "build", "forage", "claim"}:
                 action = "observe" if target else "wander"
 
         agent.last_action = action
-        agent.record_action(world.tick_number, action, success)
-        world.increment_metric(f"action_{action}")
+        agent.record_action(world.tick_number, original_action, success)
+        world.increment_metric(f"action_{original_action}")
         if success:
             world.increment_metric("successful_actions")
         else:
             world.increment_metric("failed_actions")
-        _log_action(world, agent, action, phrase, target, dx, dy, success, logged_success)
+        _log_action(world, agent, original_action, phrase, target, dx, dy, success, logged_success)
 
 
 def _log_action(world, agent, action, phrase, target, dx, dy, success=True, already_logged=False):
@@ -284,16 +347,15 @@ async def simulation_loop(world: World):
         world.tick_social_status()
 
         try:
-            results = await run_tick(world)
-            apply_results(world, results)
+            async for agent_id, result in run_tick(world):
+                apply_results(world, [(agent_id, result)])
+                if _broadcast_callback:
+                    try:
+                        await _broadcast_callback(world.to_snapshot())
+                    except Exception as e:
+                        logger.error(f"  Broadcast error: {e}")
         except Exception as e:
             logger.error(f"  Tick error: {e}", exc_info=True)
-
-        if _broadcast_callback:
-            try:
-                await _broadcast_callback(world.to_snapshot())
-            except Exception as e:
-                logger.error(f"  Broadcast error: {e}")
 
         elapsed = time.time() - tick_start
         logger.info(f"Tick {world.tick_number} complete ({elapsed:.1f}s)")

@@ -16,6 +16,8 @@ def build_agent_prompt(agent: Agent, world: World) -> str:
         nearby_info.append({
             "id": other.id,
             "name": other.name,
+            "x": round(other.x, 1),
+            "y": round(other.y, 1),
             "relationship": rel.label(),
             "bond": round(rel.bond_score(), 2),
             "debt": round(rel.debt, 2),
@@ -77,13 +79,32 @@ def build_agent_prompt(agent: Agent, world: World) -> str:
         "nearby_agents": nearby_info,
         "nearby_resources": resource_info,
         "last_action": agent.last_action,
+        "position": {"x": round(agent.x, 1), "y": round(agent.y, 1)},
+        "world_bounds": {"min": 1, "max": 59},
         "tick": world.tick_number,
     }
+
+    # All agent positions for movement planning
+    all_agent_positions = [
+        {"id": a.id, "name": a.name, "x": round(a.x, 1), "y": round(a.y, 1)}
+        for a in world.agents.values() if a.alive and a.id != agent.id
+    ]
 
     valid_target_ids = [a["id"] for a in nearby_info]
     valid_target_str = ", ".join(f'"{i}"' for i in valid_target_ids) if valid_target_ids else "none nearby"
     valid_resource_names = [r["name"] for r in resource_info]
     valid_resource_str = ", ".join(f'"{n}"' for n in valid_resource_names) if valid_resource_names else "none nearby"
+    all_positions_str = ", ".join(f'{a["name"]}({a["x"]},{a["y"]})' for a in all_agent_positions)
+
+    # Warn LLM about recently repeated failed actions
+    recent_failed = [h["action"] for h in agent.action_history[-4:] if not h.get("success", True)]
+    failed_counts = {}
+    for a in recent_failed:
+        failed_counts[a] = failed_counts.get(a, 0) + 1
+    repeated_failures = [f"{act} (failed {n}x)" for act, n in failed_counts.items() if n >= 2]
+    warnings_str = ""
+    if repeated_failures:
+        warnings_str = f"\nWARNING: You repeatedly failed these — do NOT choose them again this tick: {', '.join(repeated_failures)}\n"
 
     return f"""You are {agent.name}, a person surviving in a harsh world.
 
@@ -97,7 +118,7 @@ YOUR STATE:
 
 VALID TARGET IDs: {valid_target_str}
 VALID RESOURCE NAMES: {valid_resource_str}
-
+ALL AGENT POSITIONS (name(x,y)): {all_positions_str}{warnings_str}
 DECIDE what you do this moment. You are NOT an NPC. You are a real person with history, fears, desires, and relationships.
 
 ACTIONS available:
@@ -125,6 +146,11 @@ PERSONALITY RULES — this is who you are:
 - Low courage: avoid confrontation, retreat when threatened
 - Group members should help their camp survive, contribute to projects, and share when cohesion is high
 - Avoid repeating the same action over and over unless a crisis forces it
+- Vary your actions — avoid doing the exact same action more than 3 ticks in a row
+- Your position and ALL agent positions are shown above. World bounds are 1–59 on both axes.
+- For wander: use dx/dy to move TOWARD a specific agent or resource. Calculate direction from your position to their position. Example: if you are at x=10,y=10 and target is at x=20,y=15, set dx=+1.5, dy=+0.8. Never pick dx=0, dy=0.
+- If near an edge (position < 5 or > 55), move dx/dy toward center (30,30).
+- For observe: ONLY choose observe if there is a valid nearby agent to watch. Use their id as target_id. Never observe with target_id=null.
 
 MEMORY RULES:
 - If someone in your memories is nearby, you MUST reference your history with them

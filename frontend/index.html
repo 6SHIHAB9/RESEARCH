@@ -580,6 +580,23 @@ function processSnapshot(data) {
           
           if (incoming.last_action !== oldAction) { 
             agent.pingRadius = 4; agent._pulseId = incoming.id; 
+
+            // --- NEW: Force EVERY action change into the live feed ---
+            const syntheticEvent = {
+              tick: state.tick,
+              agent: incoming.name,
+              action: incoming.last_action,
+              target: incoming.target,
+              phrase: incoming.phrase
+            };
+            
+            const sig = `${syntheticEvent.agent}-${syntheticEvent.action}-${syntheticEvent.target}-${syntheticEvent.phrase}`;
+            if (!state.recentEventHashes.includes(sig)) {
+              state.recentEventHashes.push(sig);
+              if (state.recentEventHashes.length > 50) state.recentEventHashes.shift();
+              createFeedEvent(syntheticEvent);
+            }
+            // ---------------------------------------------------------
           }
         }
       }
@@ -588,27 +605,25 @@ function processSnapshot(data) {
   }
 
   if (data.events) {
-    const fresh = data.events.filter(e => e.tick === state.tick);
+    // FIX: show events from last 10 ticks, not just current tick
+    const tenTicksAgo = (state.tick || 0) - 10;
+    const fresh = data.events.filter(e => e.tick > tenTicksAgo && e.tick <= (state.tick || 9999));
     fresh.forEach(e => {
       const sig = `${e.agent}-${e.action}-${e.target}-${e.phrase}`;
       if (state.recentEventHashes.includes(sig)) return;
       state.recentEventHashes.push(sig);
       if (state.recentEventHashes.length > 30) state.recentEventHashes.shift();
 
-      if ((e.type||'').includes('confront')) state.metrics.conflicts++;
       createFeedEvent(e);
     });
-    document.getElementById('val-conflicts').innerText = state.metrics.conflicts;
+    // FIX: read conflicts from persistent backend metric, not local counter
+    const backendConflicts = (data.metrics && data.metrics.action_confront) || 0;
+    document.getElementById('val-conflicts').innerText = backendConflicts;
   }
 }
 
 function createFeedEvent(e) {
   const t = (e.type || e.action || '').toLowerCase();
-
-  // COMPLETELY DROP HESITATIONS/FAILURES FROM THE FEED
-  if (t.includes('fail') || t.includes('cancel')) {
-      return;
-  }
 
   const feed = document.getElementById('feed-container');
   const empty = feed.querySelector('.empty');
@@ -628,13 +643,11 @@ function createFeedEvent(e) {
 
   if (t.includes('speak') || t.includes('speech') || e.phrase) {
     typeClass = 'event-speech'; tag = 'Speech';
-    
     let verb = 'spoke to';
     if (e.phrase && e.phrase.includes('!')) verb = 'warned';
     else if (e.phrase && e.phrase.includes('?')) verb = 'asked';
 
     let targetHtml = targetName ? `<span class="ev-agent">${targetName}</span>` : 'another';
-    
     body = `${agentHtml} ${verb} ${targetHtml}.`;
     if (e.phrase) body += `<span class="ev-quote">“${e.phrase}”</span>`;
   } 
@@ -655,8 +668,6 @@ function createFeedEvent(e) {
     tag = 'Action';
     body = `${agentHtml} ${narrativeAction}.`;
   }
-
-  if (body.includes('performed a quiet action') && Math.random() > 0.2) return; 
 
   card.className = `event-card ${typeClass}`;
   card.innerHTML = `<div class="ev-meta"><span>T·${String(state.tick).padStart(5,'0')}</span><span class="ev-tag">${tag}</span></div><div class="ev-body">${body}</div>`;
@@ -719,7 +730,11 @@ function connect() {
   try { ws = new WebSocket(WS_URL); } catch (err) {
     status.classList.add('offline'); label.innerText = 'Offline'; setTimeout(connect, 3000); return;
   }
-  ws.onopen = () => { status.classList.remove('offline'); label.innerText = 'Live'; };
+  ws.onopen = () => {
+    status.classList.remove('offline'); label.innerText = 'Live';
+    // FIX: clear dedup hashes on reconnect so history events aren't skipped
+    state.recentEventHashes = [];
+  };
   ws.onmessage = (e) => { try { processSnapshot(JSON.parse(e.data)); } catch (err) { console.warn('Stream parse error', err); } };
   ws.onclose = () => { status.classList.add('offline'); label.innerText = 'Reconnecting'; setTimeout(connect, 3000); };
   ws.onerror = () => { try { ws.close(); } catch {} };
