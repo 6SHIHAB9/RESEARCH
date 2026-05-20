@@ -239,11 +239,6 @@
     </div>
 
     <div class="header-right">
-      <div class="metrics">
-        <div class="metric"><span class="metric-label">Cycle</span><span class="metric-value" id="val-tick">00000</span></div>
-        <div class="metric"><span class="metric-label">Entities</span><span class="metric-value accent" id="val-agents">0</span></div>
-        <div class="metric"><span class="metric-label">Conflicts</span><span class="metric-value warn" id="val-conflicts">0</span></div>
-      </div>
       <div class="status" id="conn-status"><span class="status-dot"></span><span id="conn-label">Connecting</span></div>
     </div>
   </header>
@@ -670,7 +665,7 @@ function processSnapshot(data) {
               phrase: incoming.phrase
             };
             
-            const sig = `${syntheticEvent.tick}-${syntheticEvent.agent}-${syntheticEvent.action}-${Math.random()}`;
+            const sig = `${syntheticEvent.tick}-${syntheticEvent.agent}-${syntheticEvent.action}-${syntheticEvent.target || ''}-${syntheticEvent.phrase || ''}`;
             if (!state.recentEventHashes.includes(sig)) {
               state.recentEventHashes.push(sig);
               if (state.recentEventHashes.length > 50) state.recentEventHashes.shift();
@@ -689,7 +684,7 @@ function processSnapshot(data) {
     const tenTicksAgo = (state.tick || 0) - 10;
     const fresh = data.events.filter(e => e.tick > tenTicksAgo && e.tick <= (state.tick || 9999));
     fresh.forEach(e => {
-      const sig = `${e.tick}-${e.agent}-${e.action}-${Math.random()}`;
+      const sig = `${e.tick}-${e.agent}-${e.action}-${e.target || ''}-${e.phrase || ''}`;
       if (state.recentEventHashes.includes(sig)) return;
       state.recentEventHashes.push(sig);
       if (state.recentEventHashes.length > 30) state.recentEventHashes.shift();
@@ -752,7 +747,20 @@ function createFeedEvent(e) {
   }
 
   card.className = `event-card ${typeClass}`;
-  card.innerHTML = `<div class="ev-meta"><span>T·${String(e.tick || state.tick).padStart(5,'0')}</span><span class="ev-tag">${tag}</span></div><div class="ev-body">${body}</div>`;
+  const nowIST = new Date().toLocaleTimeString('en-IN', {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false
+  });
+
+  card.innerHTML = `
+  <div class="ev-meta">
+    <span>${nowIST} IST</span>
+    <span class="ev-tag">${tag}</span>
+  </div>
+  <div class="ev-body">${body}</div>
+  `;
   
   feed.prepend(card);
   while (feed.children.length > MAX_FEED) feed.removeChild(feed.lastChild);
