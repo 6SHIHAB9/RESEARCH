@@ -630,18 +630,21 @@ function processSnapshot(data) {
   if (!data) return;
 
   if (data.tick !== undefined) {
-    state.tick = data.tick; document.getElementById('val-tick').innerText = String(state.tick).padStart(5,'0');
+    state.tick = data.tick; 
   }
 
   if (data.agents) {
-    document.getElementById('val-agents').innerText = data.agents.length;
+    
     data.agents.forEach(incoming => {
       let agent = state.agents.get(incoming.id);
       
       if (!agent) {
         agent = { ...incoming, renderX: incoming.x, renderY: incoming.y, targetX: incoming.x, targetY: incoming.y, trail: [], pingRadius: 100 };
         // FIX: Cache the narrative text exactly once upon agent creation
-        agent._displayAction = translateAction(agent.last_action, agent.target, false).replace(/<[^>]+>/g, '');
+        agent._displayAction =
+          (translateAction(agent.last_action, agent.target, false) || 'resting quietly')
+            .replace(/<[^>]+>/g, '');
+
         state.agents.set(incoming.id, agent);
       } else {
         const oldAction = agent.last_action;
@@ -651,7 +654,9 @@ function processSnapshot(data) {
         
         // FIX: Update the Roster/Hover text ONLY when the action or target actually changes
         if (incoming.last_action !== oldAction || incoming.target !== oldTarget) {
-          agent._displayAction = translateAction(agent.last_action, agent.target, false).replace(/<[^>]+>/g, '');
+          agent._displayAction =
+            (translateAction(agent.last_action, agent.target, false) || 'resting quietly')
+              .replace(/<[^>]+>/g, '');
           
           if (incoming.last_action !== oldAction) { 
             agent.pingRadius = 4; agent._pulseId = incoming.id; 
@@ -693,60 +698,65 @@ function processSnapshot(data) {
     });
     // FIX: read conflicts from persistent backend metric, not local counter
     const backendConflicts = (data.metrics && data.metrics.action_confront) || 0;
-    document.getElementById('val-conflicts').innerText = backendConflicts;
   }
 }
-
 function createFeedEvent(e) {
-  const t = (e.type || e.action || '').toLowerCase();
 
-  const feed = document.getElementById('feed-container');
-  const empty = feed.querySelector('.empty');
-  if (empty) empty.remove();
-
-  const card = document.createElement('div');
-  
-  const agentName = (e.agent && e.agent !== 'Unknown') ? e.agent : 'An inhabitant';
-  const targetName = (e.target && e.target !== 'Unknown') ? e.target : null;
-  const agentHtml = `<span class="ev-agent">${agentName}</span>`;
-  
-  let typeClass = 'event-move';
-  let tag = 'Event';
-  let body = '';
-
-  const narrativeAction = translateAction(t, targetName, true);
+  const narrativeAction = translateAction(
+    e.action,
+    e.target,
+    true
+  );
 
   if (!narrativeAction) return;
 
-  if (t.includes('speak') || t.includes('speech') || e.phrase) {
-    typeClass = 'event-speech'; tag = 'Speech';
-    let verb = 'spoke to';
-    if (e.phrase && e.phrase.includes('!')) verb = 'warned';
-    else if (e.phrase && e.phrase.includes('?')) verb = 'asked';
+  const container = document.getElementById('feed-container');
 
-    let targetHtml = targetName ? `<span class="ev-agent">${targetName}</span>` : 'another';
-    body = `${agentHtml} ${verb} ${targetHtml}.`;
-    if (e.phrase) body += `<span class="ev-quote">“${e.phrase}”</span>`;
-  } 
-  else if (t.includes('confront') || t.includes('attack')) {
-    typeClass = 'event-conflict'; tag = 'Conflict';
-    body = `${agentHtml} ${narrativeAction}.`;
-  } 
-  else if (t.includes('trade') || t.includes('give')) {
-    typeClass = 'event-trade'; tag = 'Trade';
-    body = `${agentHtml} ${narrativeAction}.`;
-  } 
-  else if (t.includes('memory') || t.includes('think') || t.includes('remember')) {
-    typeClass = 'event-memory'; tag = 'Memory';
-    body = `${agentHtml} ${narrativeAction}.`;
-    if (e.phrase) body += `<span class="ev-quote">“${e.phrase}”</span>`;
-  } 
-  else {
-    tag = 'Action';
-    body = `${agentHtml} ${narrativeAction}.`;
+  const empty = container.querySelector('.empty');
+  if (empty) empty.remove();
+
+  const card = document.createElement('div');
+
+  let typeClass = 'event-move';
+  let tag = 'Action';
+
+  const a = (e.action || '').toLowerCase();
+
+  if (
+    a.includes('speak') ||
+    a.includes('talk') ||
+    a.includes('said')
+  ) {
+    typeClass = 'event-speech';
+    tag = 'Speech';
+  }
+
+  if (
+    a.includes('trade') ||
+    a.includes('give')
+  ) {
+    typeClass = 'event-trade';
+    tag = 'Trade';
+  }
+
+  if (
+    a.includes('confront') ||
+    a.includes('attack')
+  ) {
+    typeClass = 'event-conflict';
+    tag = 'Conflict';
+  }
+
+  if (
+    a.includes('memory') ||
+    a.includes('remember')
+  ) {
+    typeClass = 'event-memory';
+    tag = 'Memory';
   }
 
   card.className = `event-card ${typeClass}`;
+
   const nowIST = new Date().toLocaleTimeString('en-IN', {
     hour: '2-digit',
     minute: '2-digit',
@@ -754,18 +764,39 @@ function createFeedEvent(e) {
     hour12: false
   });
 
-  card.innerHTML = `
-  <div class="ev-meta">
-    <span>${nowIST} IST</span>
-    <span class="ev-tag">${tag}</span>
-  </div>
-  <div class="ev-body">${body}</div>
-  `;
-  
-  feed.prepend(card);
-  while (feed.children.length > MAX_FEED) feed.removeChild(feed.lastChild);
-}
+  const agentName =
+    (e.agent && e.agent !== 'Unknown')
+      ? e.agent
+      : 'An inhabitant';
 
+  const agentHtml =
+    `<span class="ev-agent">${agentName}</span>`;
+
+  let body =
+    `${agentHtml} ${narrativeAction}.`;
+
+  if (e.phrase) {
+    body += `
+      <span class="ev-quote">
+        “${e.phrase}”
+      </span>
+    `;
+  }
+
+  card.innerHTML = `
+    <div class="ev-meta">
+      <span>${nowIST} IST</span>
+      <span class="ev-tag">${tag}</span>
+    </div>
+    <div class="ev-body">${body}</div>
+  `;
+
+  container.prepend(card);
+
+  while (container.children.length > MAX_FEED) {
+    container.removeChild(container.lastChild);
+  }
+}
 function renderRoster() {
   const container = document.getElementById('roster-container');
   const empty = container.querySelector('.empty');
