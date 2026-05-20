@@ -369,6 +369,23 @@ async def simulation_loop(world: World):
 
         try:
             async for agent_id, result in run_tick(world):
+                # ── Involuntary social override ────────────────────────────
+                # If the agent is lonely/angry and chose a non-social action,
+                # force them to speak — the LLM phrase still comes through.
+                agent = world.agents.get(agent_id)
+                if agent and result:
+                    llm_action = result.get("action", "wander")
+                    nearby = world.nearby_agents(agent)
+                    if nearby and llm_action not in ("speak", "trade", "give", "confront"):
+                        loneliness = agent.needs.loneliness
+                        anger      = agent.needs.anger
+                        # Loneliness > 0.5 or anger > 0.6 → force speak
+                        if loneliness > 0.5 or anger > 0.6:
+                            closest = min(nearby, key=lambda a: (a.x - agent.x)**2 + (a.y - agent.y)**2)
+                            result["action"]    = "speak"
+                            result["target_id"] = closest.id
+                            # Keep LLM phrase if it has one, else leave blank (will use last_phrase fallback)
+                # ──────────────────────────────────────────────────────────
                 apply_results(world, [(agent_id, result)])
                 if _broadcast_callback:
                     try:
