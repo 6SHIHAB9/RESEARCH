@@ -554,7 +554,7 @@ function roundRect(ctx, x, y, w, h, r) {
 function processSnapshot(data) {
   if (!data) return;
 
-  if (data.tick) {
+  if (data.tick !== undefined) {
     state.tick = data.tick; document.getElementById('val-tick').innerText = String(state.tick).padStart(5,'0');
   }
 
@@ -590,7 +590,7 @@ function processSnapshot(data) {
               phrase: incoming.phrase
             };
             
-            const sig = `${syntheticEvent.agent}-${syntheticEvent.action}-${syntheticEvent.target}-${syntheticEvent.phrase}`;
+            const sig = `${syntheticEvent.tick}-${syntheticEvent.agent}-${syntheticEvent.action}-${Math.random()}`;
             if (!state.recentEventHashes.includes(sig)) {
               state.recentEventHashes.push(sig);
               if (state.recentEventHashes.length > 50) state.recentEventHashes.shift();
@@ -609,7 +609,7 @@ function processSnapshot(data) {
     const tenTicksAgo = (state.tick || 0) - 10;
     const fresh = data.events.filter(e => e.tick > tenTicksAgo && e.tick <= (state.tick || 9999));
     fresh.forEach(e => {
-      const sig = `${e.agent}-${e.action}-${e.target}-${e.phrase}`;
+      const sig = `${e.tick}-${e.agent}-${e.action}-${Math.random()}`;
       if (state.recentEventHashes.includes(sig)) return;
       state.recentEventHashes.push(sig);
       if (state.recentEventHashes.length > 30) state.recentEventHashes.shift();
@@ -670,7 +670,7 @@ function createFeedEvent(e) {
   }
 
   card.className = `event-card ${typeClass}`;
-  card.innerHTML = `<div class="ev-meta"><span>T·${String(state.tick).padStart(5,'0')}</span><span class="ev-tag">${tag}</span></div><div class="ev-body">${body}</div>`;
+  card.innerHTML = `<div class="ev-meta"><span>T·${String(e.tick || state.tick).padStart(5,'0')}</span><span class="ev-tag">${tag}</span></div><div class="ev-body">${body}</div>`;
   
   feed.prepend(card);
   while (feed.children.length > MAX_FEED) feed.removeChild(feed.lastChild);
