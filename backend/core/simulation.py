@@ -284,42 +284,57 @@ def apply_results(world: World, results: list):
 
 def _log_action(world, agent, action, phrase, target, dx, dy, success=True, already_logged=False):
     if not success:
-        logger.info(f"  [x] {agent.name} failed {action}")
         return
 
     tname = target.name if target else ""
+
+    # UNIVERSAL EVENT LOGGING
+    world.log(action, {
+        "agent": agent.name,
+        "agent_id": agent.id,
+        "target": tname,
+        "target_id": target.id if target else None,
+        "phrase": phrase,
+        "dx": dx,
+        "dy": dy,
+    })
+
     if action == "speak" and phrase:
-        logger.info(f"  [say] {agent.name} -> {tname or '(alone)'}: \"{phrase}\"")
-        world.log("speech", {
-            "agent": agent.name,
-            "agent_id": agent.id,
-            "target": tname,
-            "target_id": target.id if target else None,
-            "phrase": phrase,
-        })
+        logger.info(f'  [say] {agent.name} -> {tname or "(alone)"}: "{phrase}"')
+
     elif action == "confront":
         logger.info(f"  [fight] {agent.name} confronted {tname}")
-        world.log("confrontation", {"agent": agent.name, "agent_id": agent.id, "target": tname})
+
     elif action == "retreat":
         logger.info(f"  [back] {agent.name} retreated from {tname or 'threat'}")
+
     elif action == "rest":
         logger.info(f"  [rest] {agent.name} resting")
+
     elif action == "observe":
         logger.info(f"  [watch] {agent.name} watching {tname or '...'}")
+
     elif action == "forage":
         logger.info(f"  [forage] {agent.name} foraging")
+
     elif action == "wander":
         logger.info(f"  [move] {agent.name} wandering ({dx:+.1f}, {dy:+.1f})")
+
     elif action == "ignore":
         logger.info(f"  [ignore] {agent.name} ignoring {tname}")
+
     elif action == "give" and not already_logged:
         logger.info(f"  [give] {agent.name} gave to {tname}")
+
     elif action == "trade" and not already_logged:
         logger.info(f"  [trade] {agent.name} traded with {tname}")
+
     elif action == "claim":
         logger.info(f"  [claim] {agent.name} claiming territory")
+
     elif action == "craft":
         logger.info(f"  [craft] {agent.name} crafting")
+
     elif action == "build":
         logger.info(f"  [build] {agent.name} building")
 
@@ -328,8 +343,10 @@ def _log_action(world, agent, action, phrase, target, dx, dy, success=True, alre
         if rel.encounters > 0 and rel.encounters % 5 == 0:
             bond = rel.bond_score()
             if abs(bond) > 0.3:
-                logger.info(f"  [bond] {agent.name} <-> {tname}: {rel.label()} (bond={bond:.2f}, enc={rel.encounters})")
-
+                logger.info(
+                    f"  [bond] {agent.name} <-> {tname}: "
+                    f"{rel.label()} (bond={bond:.2f}, enc={rel.encounters})"
+                )
 
 async def simulation_loop(world: World):
     logger.info("Civilization awakening...")

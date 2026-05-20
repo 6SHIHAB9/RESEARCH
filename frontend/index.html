@@ -352,9 +352,15 @@ function translateAction(actionRaw, targetName, isHtml = false) {
   }
 
   // FORAGE
-  if (a.includes('forage')) {
-    return `searched the nearby terrain for food`;
-  }
+  if (
+   a.includes('forage') ||
+   a.includes('foraging') ||
+   a.includes('search') ||
+   a.includes('scavenge') ||
+   a.includes('gather')
+ ) {
+   return `searched the nearby terrain for food`;
+ }
 
   // OBSERVE / WATCH
   if (
@@ -369,21 +375,27 @@ function translateAction(actionRaw, targetName, isHtml = false) {
   // MOVEMENT / WANDERING
   if (
     a.includes('wander') ||
+    a.includes('wandering') ||
     a.includes('move') ||
-    a.includes('walking')
-  ) {
+    a.includes('moving') ||
+    a.includes('walking') ||
+    a.includes('travel') ||
+    a.includes('explore')
+) {
     return `wandered through the surrounding area`;
   }
 
   // TRADE
   if (
-    a.includes('trade') ||
-    a.includes('give')
-  ) {
-    return t
-      ? `traded supplies with ${t}`
-      : `bartered for supplies`;
-  }
+   a.includes('trade') ||
+   a.includes('give')
+ ) {
+   if (t) {
+     return `traded supplies with ${t}`;
+   }
+
+  return `bartered for supplies`;
+ }
 
   // CONFLICT
   if (
