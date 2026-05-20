@@ -57,10 +57,10 @@ class Needs:
         Tuned for long ticks (300s) — slow decay so agents socialise
         rather than spending every tick in survival mode.
         """
-        self.hunger    = min(1.0, self.hunger + random.uniform(0.008, 0.015))
-        self.thirst    = min(1.0, self.thirst + random.uniform(0.010, 0.018))
-        self.energy    = max(0.0, self.energy - random.uniform(0.005, 0.010))
-        self.loneliness= min(1.0, self.loneliness + (0.015 if traits.get("empathy", 0.5) > 0.6 else 0.008))
+        self.hunger    = min(1.0, self.hunger + random.uniform(0.002, 0.004))
+        self.thirst    = min(1.0, self.thirst + random.uniform(0.002, 0.005))
+        self.energy    = max(0.0, self.energy - random.uniform(0.001, 0.003))
+        self.loneliness= min(1.0, self.loneliness + (0.010 if traits.get("empathy", 0.5) > 0.6 else 0.006))
         self.fear      = max(0.0, self.fear - 0.01)
         self.anger     = max(0.0, self.anger - 0.01)
 
@@ -72,8 +72,8 @@ class Needs:
         # Survival needs only dominate when genuinely urgent (>0.6)
         # otherwise social/emotional needs can win
         scores = {
-            "hunger":    self.hunger     if self.hunger > 0.6     else self.hunger * 0.3,
-            "thirst":    self.thirst     if self.thirst > 0.6     else self.thirst * 0.3,
+            "hunger":    self.hunger     if self.hunger > 0.75    else self.hunger * 0.15,
+            "thirst":    self.thirst     if self.thirst > 0.75    else self.thirst * 0.15,
             "loneliness":self.loneliness * 0.9,
             "fear":      self.fear,
             "anger":     self.anger * 0.8,
@@ -83,15 +83,32 @@ class Needs:
     def crisis(self) -> list[str]:
         """Return list of needs in critical state."""
         c = []
-        if self.hunger > 0.8:    c.append("starving")
-        if self.thirst > 0.8:    c.append("dehydrated")
-        if self.energy < 0.15:   c.append("exhausted")
+        if self.hunger > 0.92:   c.append("starving")
+        if self.thirst > 0.92:   c.append("dehydrated")
+        if self.energy < 0.08:   c.append("exhausted")
         if self.health < 0.3:    c.append("sick")
         if self.loneliness > 0.8:c.append("desperate_for_contact")
         return c
 
     def to_dict(self) -> dict:
         return {k: round(v, 2) for k, v in self.__dict__.items()}
+
+    def to_prompt_dict(self) -> dict:
+        """Human-readable needs for LLM prompt — no raw numbers."""
+        def label(v, invert=False):
+            v = 1.0 - v if invert else v
+            if v < 0.25: return "fine"
+            if v < 0.50: return "mild"
+            if v < 0.75: return "high"
+            return "critical"
+        return {
+            "hunger":     label(self.hunger),
+            "thirst":     label(self.thirst),
+            "energy":     label(self.energy, invert=True),
+            "loneliness": label(self.loneliness),
+            "fear":       label(self.fear),
+            "anger":      label(self.anger),
+        }
 
 
 # ── Core Agent ────────────────────────────────────────────────────────────────

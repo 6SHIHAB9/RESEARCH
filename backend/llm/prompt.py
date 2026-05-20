@@ -57,7 +57,7 @@ def build_agent_prompt(agent: Agent, world: World) -> str:
         "backstory": agent.backstory,
         "traits": agent.traits,
         "mood": agent.mood_label(),
-        "needs": agent.needs.to_dict(),
+        "needs": agent.needs.to_prompt_dict(),  # qualitative labels, not raw floats
         "dominant_need": agent.needs.dominant(),
         "crisis": crisis,
         "inventory": {k: v for k, v in agent.inventory.items() if v > 0},
