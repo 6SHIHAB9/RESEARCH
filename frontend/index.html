@@ -317,59 +317,127 @@ const state = {
 const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
 
 function translateAction(actionRaw, targetName, isHtml = false) {
-  if (!actionRaw) return 'resting quietly';
-  
+
+  if (!actionRaw) return null;
+
   let a = actionRaw.toLowerCase();
-  let tRaw = targetName && targetName !== 'Unknown' ? targetName : null;
-  let t = tRaw ? (isHtml ? `<span class="ev-agent">${tRaw}</span>` : tRaw) : '';
 
-  if (a.includes('fail') || a.includes('cancel')) {
-    if (a.includes('observe')) return t ? pick([`lost sight of ${t}`, `could no longer track ${t}`]) : `lost track of their surroundings`;
-    if (a.includes('trade')) return t ? `abandoned a trade with ${t}` : `reconsidered a transaction`;
-    return pick([`abandoned an attempted action`, `hesitated and stopped`, `paused uncertainly`]);
+  let tRaw = targetName && targetName !== 'Unknown'
+    ? targetName
+    : null;
+
+  let t = tRaw
+    ? (isHtml
+        ? `<span class="ev-agent">${tRaw}</span>`
+        : tRaw)
+    : '';
+
+  // REMOVE FAILED / USELESS ACTIONS
+  if (
+    a.includes('fail') ||
+    a.includes('failed') ||
+    a.includes('hesitated') ||
+    a.includes('paused') ||
+    a.includes('abandoned') ||
+    a.includes('cancel')
+  ) {
+    return null;
   }
 
+  // RUMORS
   if (a.includes('rumor')) {
-    return t ? pick([`quietly spread suspicion about ${t}`, `whispered secrets regarding ${t}`]) : `shared hushed rumors`;
-  }
-  
-  if (a.includes('forage')) {
-    return pick([`searched the nearby terrain for food`, `scavenged the area for supplies`, `looked for provisions`]);
-  }
-  
-  if (a.includes('observe')) {
-    return t ? pick([`watched ${t} carefully`, `kept a close eye on ${t}`]) : `surveyed the surrounding area`;
-  }
-  
-  if (a.includes('wander') || a.includes('move')) {
-    return pick([`wandered across the sector`, `patrolled the perimeter`, `relocated to a new position`]);
-  }
-  
-  if (a.includes('trade') || a.includes('give')) {
-    return t ? pick([`traded supplies with ${t}`, `exchanged resources with ${t}`]) : pick([`traded with a passerby`, `bartered for supplies`]);
-  }
-  
-  if (a.includes('confront') || a.includes('attack')) {
-    return t ? pick([`stepped up to confront ${t}`, `clashed with ${t}`]) : pick([`lashed out defensively`, `instigated a conflict`]);
-  }
-  
-  if (a.includes('flee') || a.includes('escape')) {
-    return t ? pick([`retreated quickly from ${t}`, `fled the area to avoid ${t}`]) : `retreated to a safer distance`;
-  }
-  
-  if (a.includes('speak') || a.includes('talk')) {
-    return t ? `spoke with ${t}` : `spoke aloud`;
-  }
-  
-  if (a.includes('memory') || a.includes('remember') || a.includes('think')) {
-    return pick([`recalled a distant memory`, `paused in quiet reflection`, `reflected on recent events`]);
-  }
-  
-  if (a.includes('sleep') || a.includes('rest')) {
-    return `rested to recover energy`;
+    return t
+      ? `quietly spread suspicion about ${t}`
+      : `shared hushed rumors`;
   }
 
-  return `performed a quiet action`;
+  // FORAGE
+  if (a.includes('forage')) {
+    return `searched the nearby terrain for food`;
+  }
+
+  // OBSERVE / WATCH
+  if (
+    a.includes('observe') ||
+    a.includes('watch')
+  ) {
+    return t
+      ? `watched ${t} carefully`
+      : `surveyed the surrounding area`;
+  }
+
+  // MOVEMENT / WANDERING
+  if (
+    a.includes('wander') ||
+    a.includes('move') ||
+    a.includes('walking')
+  ) {
+    return `wandered through the surrounding area`;
+  }
+
+  // TRADE
+  if (
+    a.includes('trade') ||
+    a.includes('give')
+  ) {
+    return t
+      ? `traded supplies with ${t}`
+      : `bartered for supplies`;
+  }
+
+  // CONFLICT
+  if (
+    a.includes('confront') ||
+    a.includes('attack')
+  ) {
+    return t
+      ? `confronted ${t}`
+      : `started a conflict`;
+  }
+
+  // FLEE
+  if (
+    a.includes('flee') ||
+    a.includes('escape')
+  ) {
+    return t
+      ? `retreated from ${t}`
+      : `retreated cautiously`;
+  }
+
+  // SPEECH
+  if (
+    a.includes('speak') ||
+    a.includes('talk') ||
+    a.includes('said')
+  ) {
+    return t
+      ? `spoke to ${t}`
+      : `spoke to another`;
+  }
+
+  // MEMORY
+  if (
+    a.includes('memory') ||
+    a.includes('remember') ||
+    a.includes('think')
+  ) {
+    return `reflected on recent events`;
+  }
+
+  // REST
+  if (
+    a.includes('sleep') ||
+    a.includes('rest')
+  ) {
+    return `rested quietly`;
+  }
+
+  // FALLBACK
+  return actionRaw
+    .replaceAll('_', ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 function getStatusBadge(actionRaw) {
@@ -640,6 +708,8 @@ function createFeedEvent(e) {
   let body = '';
 
   const narrativeAction = translateAction(t, targetName, true);
+
+  if (!narrativeAction) return;
 
   if (t.includes('speak') || t.includes('speech') || e.phrase) {
     typeClass = 'event-speech'; tag = 'Speech';
