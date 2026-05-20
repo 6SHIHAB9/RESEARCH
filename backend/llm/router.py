@@ -199,14 +199,16 @@ def _urgency_score(agent: Agent, world: World) -> float:
     score = 0.0
     needs = agent.needs
 
-    if needs.hunger > 0.8:   score += 10.0
-    if needs.thirst > 0.8:   score += 10.0
-    if needs.energy < 0.15:  score += 8.0
+    # Only trigger survival panic at very high thresholds
+    if needs.hunger > 0.9:   score += 10.0
+    if needs.thirst > 0.9:   score += 10.0
+    if needs.energy < 0.10:  score += 8.0
     if needs.health < 0.3:   score += 9.0
 
-    score += needs.hunger    * 2.0
-    score += needs.thirst    * 2.0
-    score += needs.loneliness * 1.0
+    # Reduce survival weighting so social needs compete fairly
+    score += needs.hunger    * 1.0
+    score += needs.thirst    * 1.0
+    score += needs.loneliness * 2.0
     score += needs.anger     * 1.5
 
     nearby = world.nearby_agents(agent)

@@ -53,25 +53,30 @@ class Needs:
     anger: float     = field(default_factory=lambda: random.uniform(0.0, 0.2))
 
     def tick_decay(self, traits: dict):
-        """Passive decay each tick, skewed by personality traits."""
-        self.hunger    = min(1.0, self.hunger + random.uniform(0.03, 0.06))
-        self.thirst    = min(1.0, self.thirst + random.uniform(0.04, 0.07))
-        self.energy    = max(0.0, self.energy - random.uniform(0.02, 0.04))
-        self.loneliness= min(1.0, self.loneliness + (0.04 if traits.get("empathy", 0.5) > 0.6 else 0.02))
+        """Passive decay each tick, skewed by personality traits.
+        Tuned for long ticks (300s) — slow decay so agents socialise
+        rather than spending every tick in survival mode.
+        """
+        self.hunger    = min(1.0, self.hunger + random.uniform(0.008, 0.015))
+        self.thirst    = min(1.0, self.thirst + random.uniform(0.010, 0.018))
+        self.energy    = max(0.0, self.energy - random.uniform(0.005, 0.010))
+        self.loneliness= min(1.0, self.loneliness + (0.015 if traits.get("empathy", 0.5) > 0.6 else 0.008))
         self.fear      = max(0.0, self.fear - 0.01)
         self.anger     = max(0.0, self.anger - 0.01)
 
-        # Health degrades if very hungry or thirsty
-        if self.hunger > 0.8 or self.thirst > 0.8:
-            self.health = max(0.0, self.health - 0.02)
+        # Health degrades only in true crisis
+        if self.hunger > 0.9 or self.thirst > 0.9:
+            self.health = max(0.0, self.health - 0.01)
 
     def dominant(self) -> str:
+        # Survival needs only dominate when genuinely urgent (>0.6)
+        # otherwise social/emotional needs can win
         scores = {
-            "hunger":    self.hunger,
-            "thirst":    self.thirst,
-            "loneliness":self.loneliness * 0.8,
+            "hunger":    self.hunger     if self.hunger > 0.6     else self.hunger * 0.3,
+            "thirst":    self.thirst     if self.thirst > 0.6     else self.thirst * 0.3,
+            "loneliness":self.loneliness * 0.9,
             "fear":      self.fear,
-            "anger":     self.anger * 0.7,
+            "anger":     self.anger * 0.8,
         }
         return max(scores, key=scores.get)
 
