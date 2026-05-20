@@ -799,6 +799,9 @@ function createFeedEvent(e) {
     `;
   }
 
+  const tsVal = e.ts || (Date.now() / 1000);
+  card.dataset.ts = tsVal;
+
   card.innerHTML = `
     <div class="ev-meta">
       <span>${nowIST} IST</span>
@@ -808,6 +811,11 @@ function createFeedEvent(e) {
   `;
 
   container.prepend(card);
+
+  // Re-sort all cards newest-first by ts
+  const cards = Array.from(container.querySelectorAll('.event-card'));
+  cards.sort((a, b) => parseFloat(b.dataset.ts) - parseFloat(a.dataset.ts));
+  cards.forEach(c => container.appendChild(c));
 
   while (container.children.length > MAX_FEED) {
     container.removeChild(container.lastChild);
