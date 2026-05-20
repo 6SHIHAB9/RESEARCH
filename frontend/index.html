@@ -276,471 +276,541 @@
   </main>
 
 <script>
-/**
- * OBSERVATORY — Frontend only. 
- * Action Interpretation Layer + Boundary Collision Tooltips (Fixed 60fps Randomization Glitch).
- */
-
 const WS_URL = 'wss://ist-theater-forward-lucia.trycloudflare.com/ws';
-const MAP_SIZE = 60;
-const MAX_FEED = 50;
-const LERP_SPEED = 0.04; 
 
-const state = { 
-  tick: 0, 
-  agents: new Map(), 
-  metrics: { conflicts: 0 }, 
+const MAP_SIZE = 60;
+const MAX_FEED = 80;
+const LERP_SPEED = 0.08;
+
+let reconnectTimer = null;
+let ws = null;
+
+const state = {
+  tick: 0,
+  agents: new Map(),
   hoveredAgent: null,
-  recentEventHashes: [] 
+  recentEventHashes: new Set()
 };
 
-/* ── Motes ── */
-(function spawnMotes(){
-  const root = document.getElementById('motes');
-  for (let i = 0; i < 28; i++) {
-    const m = document.createElement('div');
-    m.className = 'mote';
-    const x = Math.random()*100, y = Math.random()*100;
-    const dx = (Math.random()-0.5)*120, dy = (Math.random()-0.5)*120;
-    const dur = 14 + Math.random()*22;
-    m.style.left = x + '%'; m.style.top = y + '%';
-    m.style.setProperty('--dx', dx+'px'); m.style.setProperty('--dy', dy+'px');
-    m.style.animationDuration = dur+'s'; m.style.animationDelay = (-Math.random()*dur)+'s';
-    m.style.opacity = 0.2 + Math.random()*0.4;
-    if (Math.random() < 0.25) { m.style.width='3px'; m.style.height='3px'; }
-    root.appendChild(m);
-  }
-})();
-
-/* ── Action Interpretation Layer ── */
+/* ───────────────────────────── */
+/* Helpers */
+/* ───────────────────────────── */
 
 const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
 
-function translateAction(actionRaw, targetName, isHtml = false) {
+function translateAction(actionRaw, targetName, isHtml=false) {
   if (!actionRaw) return 'resting quietly';
-  
-  let a = actionRaw.toLowerCase();
-  let tRaw = targetName && targetName !== 'Unknown' ? targetName : null;
-  let t = tRaw ? (isHtml ? `<span class="ev-agent">${tRaw}</span>` : tRaw) : '';
+
+  const a = actionRaw.toLowerCase();
+
+  let t = targetName && targetName !== 'Unknown'
+    ? (isHtml ? `<span class="ev-agent">${targetName}</span>` : targetName)
+    : null;
 
   if (a.includes('fail') || a.includes('cancel')) {
-    if (a.includes('observe')) return t ? pick([`lost sight of ${t}`, `could no longer track ${t}`]) : `lost track of their surroundings`;
-    if (a.includes('trade')) return t ? `abandoned a trade with ${t}` : `reconsidered a transaction`;
-    return pick([`abandoned an attempted action`, `hesitated and stopped`, `paused uncertainly`]);
+    return pick([
+      'paused uncertainly',
+      'hesitated and stopped',
+      'abandoned an attempted action'
+    ]);
   }
 
-  if (a.includes('rumor')) {
-    return t ? pick([`quietly spread suspicion about ${t}`, `whispered secrets regarding ${t}`]) : `shared hushed rumors`;
+  if (a.includes('trade')) {
+    return t
+      ? `traded supplies with ${t}`
+      : 'bartered for supplies';
   }
-  
-  if (a.includes('forage')) {
-    return pick([`searched the nearby terrain for food`, `scavenged the area for supplies`, `looked for provisions`]);
-  }
-  
+
   if (a.includes('observe')) {
-    return t ? pick([`watched ${t} carefully`, `kept a close eye on ${t}`]) : `surveyed the surrounding area`;
-  }
-  
-  if (a.includes('wander') || a.includes('move')) {
-    return pick([`wandered across the sector`, `patrolled the perimeter`, `relocated to a new position`]);
-  }
-  
-  if (a.includes('trade') || a.includes('give')) {
-    return t ? pick([`traded supplies with ${t}`, `exchanged resources with ${t}`]) : pick([`traded with a passerby`, `bartered for supplies`]);
-  }
-  
-  if (a.includes('confront') || a.includes('attack')) {
-    return t ? pick([`stepped up to confront ${t}`, `clashed with ${t}`]) : pick([`lashed out defensively`, `instigated a conflict`]);
-  }
-  
-  if (a.includes('flee') || a.includes('escape')) {
-    return t ? pick([`retreated quickly from ${t}`, `fled the area to avoid ${t}`]) : `retreated to a safer distance`;
-  }
-  
-  if (a.includes('speak') || a.includes('talk')) {
-    return t ? `spoke with ${t}` : `spoke aloud`;
-  }
-  
-  if (a.includes('memory') || a.includes('remember') || a.includes('think')) {
-    return pick([`recalled a distant memory`, `paused in quiet reflection`, `reflected on recent events`]);
-  }
-  
-  if (a.includes('sleep') || a.includes('rest')) {
-    return `rested to recover energy`;
+    return t
+      ? `watched ${t} carefully`
+      : 'surveyed the surroundings';
   }
 
-  return `performed a quiet action`;
+  if (a.includes('wander') || a.includes('move')) {
+    return pick([
+      'wandered across the sector',
+      'relocated to a new position',
+      'patrolled the perimeter'
+    ]);
+  }
+
+  if (a.includes('confront') || a.includes('attack')) {
+    return t
+      ? `clashed with ${t}`
+      : 'instigated a conflict';
+  }
+
+  if (a.includes('speak') || a.includes('talk')) {
+    return t
+      ? `spoke with ${t}`
+      : 'spoke aloud';
+  }
+
+  if (a.includes('memory') || a.includes('think')) {
+    return pick([
+      'paused in reflection',
+      'recalled a distant memory',
+      'reflected quietly'
+    ]);
+  }
+
+  if (a.includes('forage')) {
+    return pick([
+      'searched for supplies',
+      'scavenged the terrain',
+      'looked for food'
+    ]);
+  }
+
+  return 'performed a quiet action';
 }
 
 function getStatusBadge(actionRaw) {
-  if (!actionRaw) return { text: 'Resting', class: '' };
-  let a = actionRaw.toLowerCase();
-  
-  if (a.includes('fail')) return { text: 'Hesitating', class: 'status-negative' };
-  if (a.includes('trade') || a.includes('give')) return { text: 'Trading', class: 'status-positive' };
-  if (a.includes('confront') || a.includes('attack')) return { text: 'Hostile', class: 'status-negative' };
-  if (a.includes('forage')) return { text: 'Scavenging', class: '' };
-  if (a.includes('wander')) return { text: 'Wandering', class: '' };
-  if (a.includes('speak') || a.includes('talk') || a.includes('rumor')) return { text: 'Conversing', class: 'status-social' };
-  if (a.includes('observe')) return { text: 'Observing', class: '' };
-  if (a.includes('sleep') || a.includes('rest')) return { text: 'Exhausted', class: 'status-negative' };
-  
-  return { text: 'Active', class: 'status-positive' };
+  if (!actionRaw) {
+    return { text:'Idle', class:'' };
+  }
+
+  const a = actionRaw.toLowerCase();
+
+  if (a.includes('trade'))
+    return { text:'Trading', class:'status-positive' };
+
+  if (a.includes('confront'))
+    return { text:'Hostile', class:'status-negative' };
+
+  if (a.includes('speak'))
+    return { text:'Conversing', class:'status-social' };
+
+  if (a.includes('forage'))
+    return { text:'Scavenging', class:'' };
+
+  if (a.includes('wander'))
+    return { text:'Wandering', class:'' };
+
+  return { text:'Active', class:'status-positive' };
 }
-
-/* ── Canvas ── */
-const canvas = document.getElementById('world-canvas');
-const ctx = canvas.getContext('2d');
-let cw, ch, dpr;
-
-function resize() {
-  const wrap = document.getElementById('map-wrapper');
-  cw = wrap.clientWidth; ch = wrap.clientHeight;
-  dpr = window.devicePixelRatio || 1;
-  canvas.width = cw * dpr; canvas.height = ch * dpr;
-  canvas.style.width = cw+'px'; canvas.style.height = ch+'px';
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-}
-window.addEventListener('resize', resize); resize();
-
-canvas.addEventListener('mousemove', (e) => {
-  const rect = canvas.getBoundingClientRect();
-  const mx = e.clientX - rect.left, my = e.clientY - rect.top;
-  const x = (mx / cw) * MAP_SIZE, y = (my / ch) * MAP_SIZE;
-  document.getElementById('hud-coords').innerHTML = `Tracking · stable<br>Coord [ ${x.toFixed(2)} , ${y.toFixed(2)} ]`;
-
-  state.hoveredAgent = null;
-  state.agents.forEach(a => {
-    const sx = (a.renderX / MAP_SIZE) * cw, sy = (a.renderY / MAP_SIZE) * ch;
-    if (Math.hypot(mx - sx, my - sy) < 18) state.hoveredAgent = a.id;
-  });
-});
 
 function actionTone(agent) {
   const act = (agent.last_action || '').toLowerCase();
-  if (act.includes('fail'))                               return '#aab3bd';
-  if (act.includes('confront') || act.includes('attack')) return '#c9667a';
-  if (act.includes('trade') || act.includes('give'))      return '#c9a06b';
-  if (act.includes('speak') || act.includes('rumor'))     return '#9b8cc4';
-  if (act.includes('memory') || act.includes('think'))    return '#7aa5c9';
+
+  if (act.includes('confront')) return '#c9667a';
+  if (act.includes('trade')) return '#c9a06b';
+  if (act.includes('speak')) return '#9b8cc4';
+  if (act.includes('memory')) return '#7aa5c9';
+
   return '#6fb3a8';
 }
 
 function hexA(hex, a) {
-  const r = parseInt(hex.slice(1,3),16), g = parseInt(hex.slice(3,5),16), b = parseInt(hex.slice(5,7),16);
+  const r = parseInt(hex.slice(1,3),16);
+  const g = parseInt(hex.slice(3,5),16);
+  const b = parseInt(hex.slice(5,7),16);
+
   return `rgba(${r},${g},${b},${a})`;
 }
 
-function draw() {
-  ctx.clearRect(0, 0, cw, ch);
-  const timePulse = Math.sin(Date.now() / 800) * 0.15;
+/* ───────────────────────────── */
+/* Canvas */
+/* ───────────────────────────── */
 
-  ctx.globalCompositeOperation = 'lighter';
-  state.agents.forEach(agent => {
-    if (!agent.top_relationships) return;
-    const p1 = { x: (agent.renderX / MAP_SIZE) * cw, y: (agent.renderY / MAP_SIZE) * ch };
-    agent.top_relationships.forEach(rel => {
-      if (Math.abs(rel.bond) < 0.2) return;
-      const target = state.agents.get(rel.id);
-      if (!target) return;
-      const p2 = { x: (target.renderX / MAP_SIZE) * cw, y: (target.renderY / MAP_SIZE) * ch };
+const canvas = document.getElementById('world-canvas');
+const ctx = canvas.getContext('2d');
 
-      const grad = ctx.createLinearGradient(p1.x,p1.y,p2.x,p2.y);
-      const col = rel.bond > 0 ? '#6fb3a8' : '#c9667a';
-      let baseAlpha = Math.min(0.35, Math.abs(rel.bond) * 0.5);
-      let animatedAlpha = Math.max(0.05, baseAlpha + (rel.bond > 0 ? timePulse : -timePulse));
+let cw, ch, dpr;
 
-      grad.addColorStop(0, hexA(col, animatedAlpha));
-      grad.addColorStop(0.5, hexA(col, animatedAlpha * 0.55));
-      grad.addColorStop(1, hexA(col, animatedAlpha));
+function resize() {
+  const wrap = document.getElementById('map-wrapper');
 
-      ctx.beginPath(); ctx.moveTo(p1.x, p1.y); ctx.lineTo(p2.x, p2.y);
-      ctx.strokeStyle = grad; ctx.lineWidth = rel.bond > 0 ? 1 : 0.8;
-      if (rel.bond < 0) { ctx.setLineDash([3, 7]); ctx.lineDashOffset = -(Date.now() / 120) % 10; }
-      ctx.stroke(); ctx.setLineDash([]);
-    });
+  cw = wrap.clientWidth;
+  ch = wrap.clientHeight;
+
+  dpr = window.devicePixelRatio || 1;
+
+  canvas.width = cw * dpr;
+  canvas.height = ch * dpr;
+
+  canvas.style.width = cw + 'px';
+  canvas.style.height = ch + 'px';
+
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+}
+
+window.addEventListener('resize', resize);
+resize();
+
+canvas.addEventListener('mousemove', e => {
+  const rect = canvas.getBoundingClientRect();
+
+  const mx = e.clientX - rect.left;
+  const my = e.clientY - rect.top;
+
+  state.hoveredAgent = null;
+
+  state.agents.forEach(a => {
+    const sx = (a.renderX / MAP_SIZE) * cw;
+    const sy = (a.renderY / MAP_SIZE) * ch;
+
+    if (Math.hypot(mx - sx, my - sy) < 14) {
+      state.hoveredAgent = a.id;
+    }
   });
-  ctx.globalCompositeOperation = 'source-over';
+});
+
+function draw() {
+  ctx.clearRect(0,0,cw,ch);
 
   state.agents.forEach(agent => {
+
     agent.renderX += (agent.targetX - agent.renderX) * LERP_SPEED;
     agent.renderY += (agent.targetY - agent.renderY) * LERP_SPEED;
 
-    if (Math.hypot(agent.targetX - agent.renderX, agent.targetY - agent.renderY) > 0.08) {
-      agent.trail.push({ x: agent.renderX, y: agent.renderY });
-      if (agent.trail.length > 26) agent.trail.shift();
-    }
+    const x = (agent.renderX / MAP_SIZE) * cw;
+    const y = (agent.renderY / MAP_SIZE) * ch;
 
-    const pos = { x: (agent.renderX / MAP_SIZE) * cw, y: (agent.renderY / MAP_SIZE) * ch };
     const tone = actionTone(agent);
-    const hovered = state.hoveredAgent === agent.id;
 
-    if (agent.trail.length > 1) {
-      for (let i = 1; i < agent.trail.length; i++) {
-        const a = agent.trail[i-1], b = agent.trail[i];
-        const t = i / agent.trail.length;
-        ctx.beginPath();
-        ctx.moveTo((a.x/MAP_SIZE)*cw, (a.y/MAP_SIZE)*ch); ctx.lineTo((b.x/MAP_SIZE)*cw, (b.y/MAP_SIZE)*ch);
-        ctx.strokeStyle = hexA(tone, 0.04 + t*0.18); ctx.lineWidth = 1.2; ctx.stroke();
-      }
-    }
+    ctx.beginPath();
+    ctx.arc(x,y,6,0,Math.PI*2);
+    ctx.fillStyle = '#f1f4f6';
+    ctx.fill();
 
-    const auraR = hovered ? 46 : 34;
-    const aura = ctx.createRadialGradient(pos.x, pos.y, 0, pos.x, pos.y, auraR);
-    aura.addColorStop(0, hexA(tone, 0.22)); aura.addColorStop(0.55, hexA(tone, 0.06)); aura.addColorStop(1, 'rgba(0,0,0,0)');
-    ctx.fillStyle = aura; ctx.beginPath(); ctx.arc(pos.x, pos.y, auraR, 0, Math.PI*2); ctx.fill();
+    ctx.beginPath();
+    ctx.arc(x,y,12,0,Math.PI*2);
+    ctx.strokeStyle = hexA(tone,0.4);
+    ctx.stroke();
 
-    if (agent.pingRadius < 48) {
-      ctx.beginPath(); ctx.arc(pos.x, pos.y, agent.pingRadius, 0, Math.PI * 2);
-      ctx.strokeStyle = hexA(tone, Math.max(0, 0.45 - agent.pingRadius/48 * 0.45));
-      ctx.lineWidth = 1.5; ctx.stroke();
-      agent.pingRadius += 0.4;
-    }
+    if (state.hoveredAgent === agent.id) {
 
-    ctx.beginPath(); ctx.arc(pos.x, pos.y, hovered ? 9 : 7, 0, Math.PI*2);
-    ctx.strokeStyle = hexA(tone, 0.55); ctx.lineWidth = 1; ctx.stroke();
+      const label = agent.name || 'Unknown';
+      const action = agent._displayAction || '';
 
-    ctx.shadowBlur = hovered ? 14 : 8; ctx.shadowColor = hexA(tone, 0.7);
-    ctx.fillStyle = '#f1f4f6'; ctx.beginPath(); ctx.arc(pos.x, pos.y, hovered ? 3.6 : 2.6, 0, Math.PI*2); ctx.fill(); ctx.shadowBlur = 0;
+      ctx.font = '12px Inter';
 
-    if (hovered) {
-      const label = (agent.name || 'Unknown');
-      
-      // FIX: Read from the cached string instead of running translateAction() randomly 60x a second.
-      const actionText = agent._displayAction || ''; 
-      
-      ctx.font = '500 12px Inter, sans-serif';
-      const nameW = ctx.measureText(label).width;
-      
-      ctx.font = '400 11px JetBrains Mono, monospace';
-      const actionW = actionText ? ctx.measureText(actionText).width : 0;
-      
-      const boxW = Math.max(nameW, actionW) + 20;
-      const boxH = actionText ? 42 : 24;
-      
-      let lx = pos.x + 14;
-      let ly = pos.y - 22;
-      
-      if (lx + boxW > cw - 10) lx = pos.x - boxW - 14; 
-      if (ly < 10) ly = pos.y + 14;
-      if (ly + boxH > ch - 10) ly = ch - boxH - 10;
+      const w = Math.max(
+        ctx.measureText(label).width,
+        ctx.measureText(action).width
+      ) + 20;
 
-      ctx.fillStyle = 'rgba(15,19,24,0.85)'; 
-      ctx.strokeStyle = 'rgba(255,255,255,0.08)'; 
-      ctx.lineWidth = 1;
-      roundRect(ctx, lx, ly, boxW, boxH, 6); 
-      ctx.fill(); ctx.stroke();
-      
-      ctx.fillStyle = '#e8ebef'; 
-      ctx.font = '500 12px Inter, sans-serif';
-      ctx.fillText(label, lx + 10, ly + 16);
+      const h = 42;
 
-      if (actionText) {
-        ctx.font = '400 11px JetBrains Mono, monospace'; 
-        ctx.fillStyle = hexA(tone, 0.9);
-        ctx.fillText(actionText, lx + 10, ly + 32);
-      }
+      ctx.fillStyle = 'rgba(15,19,24,0.9)';
+      ctx.fillRect(x+14, y-20, w, h);
+
+      ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+      ctx.strokeRect(x+14, y-20, w, h);
+
+      ctx.fillStyle = '#fff';
+      ctx.fillText(label, x+24, y-2);
+
+      ctx.fillStyle = tone;
+      ctx.fillText(action, x+24, y+14);
     }
   });
 
   requestAnimationFrame(draw);
 }
 
-function roundRect(ctx, x, y, w, h, r) {
-  ctx.beginPath(); ctx.moveTo(x+r, y); ctx.arcTo(x+w, y, x+w, y+h, r); ctx.arcTo(x+w, y+h, x, y+h, r); ctx.arcTo(x, y+h, x, y, r); ctx.arcTo(x, y, x+w, y, r); ctx.closePath();
-}
+requestAnimationFrame(draw);
 
-/* ── Ingestion ── */
-function processSnapshot(data) {
-  if (!data) return;
-
-  if (data.tick) {
-    state.tick = data.tick; document.getElementById('val-tick').innerText = String(state.tick).padStart(5,'0');
-  }
-
-  if (data.agents) {
-    document.getElementById('val-agents').innerText = data.agents.length;
-    data.agents.forEach(incoming => {
-      let agent = state.agents.get(incoming.id);
-      
-      if (!agent) {
-        agent = { ...incoming, renderX: incoming.x, renderY: incoming.y, targetX: incoming.x, targetY: incoming.y, trail: [], pingRadius: 100 };
-        // FIX: Cache the narrative text exactly once upon agent creation
-        agent._displayAction = translateAction(agent.last_action, agent.target, false).replace(/<[^>]+>/g, '');
-        state.agents.set(incoming.id, agent);
-      } else {
-        const oldAction = agent.last_action;
-        const oldTarget = agent.target;
-        Object.assign(agent, incoming);
-        agent.targetX = incoming.x; agent.targetY = incoming.y;
-        
-        // FIX: Update the Roster/Hover text ONLY when the action or target actually changes
-        if (incoming.last_action !== oldAction || incoming.target !== oldTarget) {
-          agent._displayAction = translateAction(agent.last_action, agent.target, false).replace(/<[^>]+>/g, '');
-          
-          if (incoming.last_action !== oldAction) { 
-            agent.pingRadius = 4; agent._pulseId = incoming.id; 
-
-            // --- NEW: Force EVERY action change into the live feed ---
-            const syntheticEvent = {
-              tick: state.tick,
-              agent: incoming.name,
-              action: incoming.last_action,
-              target: incoming.target,
-              phrase: incoming.phrase
-            };
-            
-            const sig = `${syntheticEvent.agent}-${syntheticEvent.action}-${syntheticEvent.target}-${syntheticEvent.phrase}`;
-            if (!state.recentEventHashes.includes(sig)) {
-              state.recentEventHashes.push(sig);
-              if (state.recentEventHashes.length > 50) state.recentEventHashes.shift();
-              createFeedEvent(syntheticEvent);
-            }
-            // ---------------------------------------------------------
-          }
-        }
-      }
-    });
-    renderRoster();
-  }
-
-  if (data.events) {
-    // FIX: show events from last 10 ticks, not just current tick
-    const tenTicksAgo = (state.tick || 0) - 10;
-    const fresh = data.events.filter(e => e.tick > tenTicksAgo && e.tick <= (state.tick || 9999));
-    fresh.forEach(e => {
-      const sig = `${e.agent}-${e.action}-${e.target}-${e.phrase}`;
-      if (state.recentEventHashes.includes(sig)) return;
-      state.recentEventHashes.push(sig);
-      if (state.recentEventHashes.length > 30) state.recentEventHashes.shift();
-
-      createFeedEvent(e);
-    });
-    // FIX: read conflicts from persistent backend metric, not local counter
-    const backendConflicts = (data.metrics && data.metrics.action_confront) || 0;
-    document.getElementById('val-conflicts').innerText = backendConflicts;
-  }
-}
+/* ───────────────────────────── */
+/* Feed */
+/* ───────────────────────────── */
 
 function createFeedEvent(e) {
-  const t = (e.type || e.action || '').toLowerCase();
 
   const feed = document.getElementById('feed-container');
+
   const empty = feed.querySelector('.empty');
+
   if (empty) empty.remove();
 
   const card = document.createElement('div');
-  
-  const agentName = (e.agent && e.agent !== 'Unknown') ? e.agent : 'An inhabitant';
-  const targetName = (e.target && e.target !== 'Unknown') ? e.target : null;
-  const agentHtml = `<span class="ev-agent">${agentName}</span>`;
-  
-  let typeClass = 'event-move';
-  let tag = 'Event';
-  let body = '';
 
-  const narrativeAction = translateAction(t, targetName, true);
+  const action = (e.action || '').toLowerCase();
 
-  if (t.includes('speak') || t.includes('speech') || e.phrase) {
-    typeClass = 'event-speech'; tag = 'Speech';
-    let verb = 'spoke to';
-    if (e.phrase && e.phrase.includes('!')) verb = 'warned';
-    else if (e.phrase && e.phrase.includes('?')) verb = 'asked';
+  let cls = 'event-move';
+  let tag = 'Action';
 
-    let targetHtml = targetName ? `<span class="ev-agent">${targetName}</span>` : 'another';
-    body = `${agentHtml} ${verb} ${targetHtml}.`;
-    if (e.phrase) body += `<span class="ev-quote">“${e.phrase}”</span>`;
-  } 
-  else if (t.includes('confront') || t.includes('attack')) {
-    typeClass = 'event-conflict'; tag = 'Conflict';
-    body = `${agentHtml} ${narrativeAction}.`;
-  } 
-  else if (t.includes('trade') || t.includes('give')) {
-    typeClass = 'event-trade'; tag = 'Trade';
-    body = `${agentHtml} ${narrativeAction}.`;
-  } 
-  else if (t.includes('memory') || t.includes('think') || t.includes('remember')) {
-    typeClass = 'event-memory'; tag = 'Memory';
-    body = `${agentHtml} ${narrativeAction}.`;
-    if (e.phrase) body += `<span class="ev-quote">“${e.phrase}”</span>`;
-  } 
-  else {
-    tag = 'Action';
-    body = `${agentHtml} ${narrativeAction}.`;
+  if (action.includes('trade')) {
+    cls = 'event-trade';
+    tag = 'Trade';
   }
 
-  card.className = `event-card ${typeClass}`;
-  card.innerHTML = `<div class="ev-meta"><span>T·${String(state.tick).padStart(5,'0')}</span><span class="ev-tag">${tag}</span></div><div class="ev-body">${body}</div>`;
-  
-  feed.prepend(card);
-  while (feed.children.length > MAX_FEED) feed.removeChild(feed.lastChild);
+  if (action.includes('confront')) {
+    cls = 'event-conflict';
+    tag = 'Conflict';
+  }
+
+  if (action.includes('speak')) {
+    cls = 'event-speech';
+    tag = 'Speech';
+  }
+
+  const narrative = translateAction(action, e.target, true);
+
+  card.className = `event-card ${cls}`;
+
+  card.innerHTML = `
+    <div class="ev-meta">
+      <span>T·${String(state.tick).padStart(5,'0')}</span>
+      <span class="ev-tag">${tag}</span>
+    </div>
+
+    <div class="ev-body">
+      <span class="ev-agent">${e.agent}</span>
+      ${narrative}.
+    </div>
+  `;
+
+  feed.appendChild(card);
+
+  feed.scrollTop = feed.scrollHeight;
+
+  while (feed.children.length > MAX_FEED) {
+    feed.removeChild(feed.firstChild);
+  }
 }
 
-function renderRoster() {
-  const container = document.getElementById('roster-container');
-  const empty = container.querySelector('.empty');
-  if (empty) empty.remove();
+/* ───────────────────────────── */
+/* Roster */
+/* ───────────────────────────── */
 
-  const sorted = Array.from(state.agents.values()).sort((a,b) => (a.name||'').localeCompare(b.name||''));
+function renderRoster() {
+
+  const container = document.getElementById('roster-container');
+
   container.innerHTML = '';
-  
-  sorted.forEach(a => {
-    const badge = getStatusBadge(a.last_action);
-    
-    // FIX: Match the map tooltip exactly using the cached string
-    const narrativeAction = a._displayAction || 'resting quietly';
-    
-    const nrg = a.needs && a.needs.energy != null ? Math.round(a.needs.energy * 100) : 100;
-    const sus = a.needs && a.needs.hunger != null ? Math.round((1 - a.needs.hunger) * 100) : 100;
-    const tone = actionTone(a);
+
+  const agents = Array.from(state.agents.values());
+
+  if (!agents.length) {
+    container.innerHTML = '<div class="empty">No entities present.</div>';
+    return;
+  }
+
+  agents.forEach(a => {
 
     const div = document.createElement('div');
+
+    const badge = getStatusBadge(a.last_action);
+
+    const nrg = a.needs?.energy
+      ? Math.round(a.needs.energy * 100)
+      : 100;
+
+    const hunger = a.needs?.hunger
+      ? Math.round((1 - a.needs.hunger) * 100)
+      : 100;
+
     div.className = 'entity-card';
-    if (a._pulseId === a.id) { div.classList.add('active-pulse'); a._pulseId = null; }
-    div.onmouseenter = () => state.hoveredAgent = a.id;
-    div.onmouseleave = () => state.hoveredAgent = null;
 
     div.innerHTML = `
       <div class="ent-head">
         <div class="ent-id">
-          <span class="ent-glyph" style="background: radial-gradient(circle at 35% 30%, rgba(255,255,255,0.6), transparent 50%), ${tone}; box-shadow: 0 0 0 1px rgba(255,255,255,0.08), 0 0 14px ${hexA(tone,0.28)};"></span>
-          <span class="ent-name">${a.name || 'Unknown'}</span>
+          <span class="ent-glyph"></span>
+          <span class="ent-name">${a.name}</span>
         </div>
-        <span class="ent-status-badge ${badge.class}">${badge.text}</span>
+
+        <span class="ent-status-badge ${badge.class}">
+          ${badge.text}
+        </span>
       </div>
+
       <div class="ent-action">
         <span class="lead">Now</span>
-        <span>${narrativeAction}.</span>
+        <span>${a._displayAction}</span>
       </div>
+
       <div class="ent-stats">
-        <div class="stat-row"><span class="label">Nrg</span><div class="bar-bg"><div class="bar-fill" style="width:${Math.max(0,Math.min(100,nrg))}%"></div></div><span class="val">${nrg}%</span></div>
-        <div class="stat-row"><span class="label">Sus</span><div class="bar-bg"><div class="bar-fill fill-sus" style="width:${Math.max(0,Math.min(100,sus))}%"></div></div><span class="val">${sus}%</span></div>
+
+        <div class="stat-row">
+          <span class="label">Nrg</span>
+
+          <div class="bar-bg">
+            <div class="bar-fill" style="width:${nrg}%"></div>
+          </div>
+
+          <span class="val">${nrg}%</span>
+        </div>
+
+        <div class="stat-row">
+          <span class="label">Sus</span>
+
+          <div class="bar-bg">
+            <div class="bar-fill fill-sus" style="width:${hunger}%"></div>
+          </div>
+
+          <span class="val">${hunger}%</span>
+        </div>
+
       </div>
     `;
+
     container.appendChild(div);
   });
-
-  if (sorted.length === 0) container.innerHTML = '<div class="empty">No entities present.</div>';
 }
+
+/* ───────────────────────────── */
+/* Snapshot */
+/* ───────────────────────────── */
+
+function processSnapshot(data) {
+
+  if (!data) return;
+
+  if (data.tick !== undefined) {
+    state.tick = data.tick;
+
+    document.getElementById('val-tick').innerText =
+      String(state.tick).padStart(5,'0');
+  }
+
+  if (data.agents) {
+
+    document.getElementById('val-agents').innerText =
+      data.agents.length;
+
+    data.agents.forEach(incoming => {
+
+      let agent = state.agents.get(incoming.id);
+
+      if (!agent) {
+
+        agent = {
+          ...incoming,
+          renderX: incoming.x,
+          renderY: incoming.y,
+          targetX: incoming.x,
+          targetY: incoming.y
+        };
+
+        agent._displayAction =
+          translateAction(agent.last_action, agent.target);
+
+        state.agents.set(incoming.id, agent);
+
+      } else {
+
+        const oldAction = agent.last_action;
+
+        Object.assign(agent, incoming);
+
+        agent.targetX = incoming.x;
+        agent.targetY = incoming.y;
+
+        if (oldAction !== incoming.last_action) {
+
+          agent._displayAction =
+            translateAction(agent.last_action, agent.target);
+
+          if (state.tick > 0) {
+
+            const sig =
+              `${state.tick}-${incoming.id}-${incoming.last_action}`;
+
+            if (!state.recentEventHashes.has(sig)) {
+
+              state.recentEventHashes.add(sig);
+
+              createFeedEvent({
+                tick: state.tick,
+                agent: incoming.name,
+                action: incoming.last_action,
+                target: incoming.target
+              });
+
+              if (state.recentEventHashes.size > 500) {
+                state.recentEventHashes.clear();
+              }
+            }
+          }
+        }
+      }
+    });
+
+    renderRoster();
+  }
+
+  if (data.metrics) {
+
+    document.getElementById('val-conflicts').innerText =
+      data.metrics.action_confront || 0;
+  }
+}
+
+/* ───────────────────────────── */
+/* WebSocket */
+/* ───────────────────────────── */
 
 function connect() {
-  const status = document.getElementById('conn-status'), label = document.getElementById('conn-label');
-  label.innerText = 'Connecting'; status.classList.remove('offline');
-  let ws;
-  try { ws = new WebSocket(WS_URL); } catch (err) {
-    status.classList.add('offline'); label.innerText = 'Offline'; setTimeout(connect, 3000); return;
+
+  clearTimeout(reconnectTimer);
+
+  const status = document.getElementById('conn-status');
+  const label = document.getElementById('conn-label');
+
+  label.innerText = 'Connecting';
+
+  status.classList.remove('offline');
+
+  try {
+
+    if (ws) {
+      ws.close();
+    }
+
+    ws = new WebSocket(WS_URL);
+
+  } catch(err) {
+
+    status.classList.add('offline');
+    label.innerText = 'Offline';
+
+    reconnectTimer = setTimeout(connect, 3000);
+
+    return;
   }
+
   ws.onopen = () => {
-    status.classList.remove('offline'); label.innerText = 'Live';
-    // FIX: clear dedup hashes on reconnect so history events aren't skipped
-    state.recentEventHashes = [];
+
+    status.classList.remove('offline');
+    label.innerText = 'Live';
+
+    console.log('WS connected');
   };
-  ws.onmessage = (e) => { try { processSnapshot(JSON.parse(e.data)); } catch (err) { console.warn('Stream parse error', err); } };
-  ws.onclose = () => { status.classList.add('offline'); label.innerText = 'Reconnecting'; setTimeout(connect, 3000); };
-  ws.onerror = () => { try { ws.close(); } catch {} };
+
+  ws.onmessage = e => {
+
+    try {
+
+      const data = JSON.parse(e.data);
+
+      processSnapshot(data);
+
+    } catch(err) {
+
+      console.warn(err);
+    }
+  };
+
+  ws.onclose = () => {
+
+    status.classList.add('offline');
+    label.innerText = 'Reconnecting';
+
+    reconnectTimer = setTimeout(connect, 3000);
+  };
+
+  ws.onerror = () => {
+
+    try {
+      ws.close();
+    } catch {}
+  };
 }
 
-requestAnimationFrame(draw); connect();
+connect();
 </script>
 </body>
 </html>
