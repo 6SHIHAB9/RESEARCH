@@ -276,9 +276,9 @@
  * Action Interpretation Layer + Boundary Collision Tooltips (Fixed 60fps Randomization Glitch).
  */
 
-const WS_URL = 'wss://ist-theater-forward-lucia.trycloudflare.com/ws';
+const WS_URL = 'ws://localhost:8000/ws';
 const MAP_SIZE = 60;
-const MAX_FEED = 50;
+const MAX_FEED = 25;
 const LERP_SPEED = 0.04; 
 
 const state = { 
@@ -661,22 +661,23 @@ function processSnapshot(data) {
           if (incoming.last_action !== oldAction) { 
             agent.pingRadius = 4; agent._pulseId = incoming.id; 
 
-            // --- NEW: Force EVERY action change into the live feed ---
-            const syntheticEvent = {
-              tick: state.tick,
-              agent: incoming.name,
-              action: incoming.last_action,
-              target: incoming.target,
-              phrase: incoming.phrase
-            };
-            
-            const sig = `${syntheticEvent.tick}-${syntheticEvent.agent}-${syntheticEvent.action}-${syntheticEvent.target || ''}-${syntheticEvent.phrase || ''}`;
-            if (!state.recentEventHashes.includes(sig)) {
-              state.recentEventHashes.push(sig);
-              if (state.recentEventHashes.length > 50) state.recentEventHashes.shift();
-              createFeedEvent(syntheticEvent);
+            // Only synthesize events for actions the backend doesn't log to data.events
+            const act = (incoming.last_action || '').toLowerCase();
+            if (act === 'wander' || act === 'observe' || act === 'retreat' || act === 'ignore') {
+              const syntheticEvent = {
+                tick: state.tick,
+                agent: incoming.name,
+                action: incoming.last_action,
+                target: incoming.target,
+                phrase: incoming.phrase
+              };
+              const sig = `${syntheticEvent.tick}-${syntheticEvent.agent}-${syntheticEvent.action}-${syntheticEvent.target || ''}-${syntheticEvent.phrase || ''}`;
+              if (!state.recentEventHashes.includes(sig)) {
+                state.recentEventHashes.push(sig);
+                if (state.recentEventHashes.length > 200) state.recentEventHashes.shift();
+                createFeedEvent(syntheticEvent);
+              }
             }
-            // ---------------------------------------------------------
           }
         }
       }
@@ -685,17 +686,31 @@ function processSnapshot(data) {
   }
 
   if (data.events) {
-    // FIX: show events from last 10 ticks, not just current tick
-    const tenTicksAgo = (state.tick || 0) - 10;
-    const fresh = data.events.filter(e => e.tick > tenTicksAgo && e.tick <= (state.tick || 9999));
-    fresh.forEach(e => {
-      const sig = `${e.tick}-${e.agent}-${e.action}-${e.target || ''}-${e.phrase || ''}`;
-      if (state.recentEventHashes.includes(sig)) return;
-      state.recentEventHashes.push(sig);
-      if (state.recentEventHashes.length > 30) state.recentEventHashes.shift();
-
-      createFeedEvent(e);
-    });
+    if (!state.feedSeeded) {
+      // First load: clear hashes, then seed with last 25 notable events (skip pure wander noise)
+      state.recentEventHashes = [];
+      const notable = data.events.filter(e => {
+        const a = (e.type || e.action || '').toLowerCase();
+        return !a.includes('wander') && a !== 'action_failed';
+      });
+      const seed = notable.length >= 25 ? notable.slice(-25) : data.events.slice(-25);
+      // Render oldest→newest so feed ends up newest-on-top
+      seed.forEach(e => {
+        const sig = `${e.tick}-${e.agent}-${e.type || e.action}-${e.target || ''}-${e.phrase || ''}`;
+        state.recentEventHashes.push(sig);
+        createFeedEvent(e);
+      });
+      state.feedSeeded = true;
+    } else {
+      // Subsequent snapshots: show anything not yet seen (dedup handles it)
+      data.events.slice(-50).forEach(e => {
+        const sig = `${e.tick}-${e.agent}-${e.type || e.action}-${e.target || ''}-${e.phrase || ''}`;
+        if (state.recentEventHashes.includes(sig)) return;
+        state.recentEventHashes.push(sig);
+        if (state.recentEventHashes.length > 200) state.recentEventHashes.shift();
+        createFeedEvent(e);
+      });
+    }
     // FIX: read conflicts from persistent backend metric, not local counter
     const backendConflicts = (data.metrics && data.metrics.action_confront) || 0;
   }
@@ -703,7 +718,7 @@ function processSnapshot(data) {
 function createFeedEvent(e) {
 
   const narrativeAction = translateAction(
-    e.action,
+    e.type || e.action,
     e.target,
     true
   );
@@ -720,7 +735,7 @@ function createFeedEvent(e) {
   let typeClass = 'event-move';
   let tag = 'Action';
 
-  const a = (e.action || '').toLowerCase();
+  const a = (e.type || e.action || '').toLowerCase();
 
   if (
     a.includes('speak') ||
@@ -757,7 +772,8 @@ function createFeedEvent(e) {
 
   card.className = `event-card ${typeClass}`;
 
-  const nowIST = new Date().toLocaleTimeString('en-IN', {
+  const eventDate = e.ts ? new Date(e.ts * 1000) : new Date();
+  const nowIST = eventDate.toLocaleTimeString('en-IN', {
     hour: '2-digit',
     minute: '2-digit',
     second: '2-digit',
@@ -829,14 +845,6 @@ function renderRoster() {
         </div>
         <span class="ent-status-badge ${badge.class}">${badge.text}</span>
       </div>
-      <div class="ent-action">
-        <span class="lead">Now</span>
-        <span>${narrativeAction}.</span>
-      </div>
-      <div class="ent-stats">
-        <div class="stat-row"><span class="label">Nrg</span><div class="bar-bg"><div class="bar-fill" style="width:${Math.max(0,Math.min(100,nrg))}%"></div></div><span class="val">${nrg}%</span></div>
-        <div class="stat-row"><span class="label">Sus</span><div class="bar-bg"><div class="bar-fill fill-sus" style="width:${Math.max(0,Math.min(100,sus))}%"></div></div><span class="val">${sus}%</span></div>
-      </div>
     `;
     container.appendChild(div);
   });
@@ -853,8 +861,9 @@ function connect() {
   }
   ws.onopen = () => {
     status.classList.remove('offline'); label.innerText = 'Live';
-    // FIX: clear dedup hashes on reconnect so history events aren't skipped
+    // clear dedup hashes and seed flag on reconnect
     state.recentEventHashes = [];
+    state.feedSeeded = false;
   };
   ws.onmessage = (e) => { try { processSnapshot(JSON.parse(e.data)); } catch (err) { console.warn('Stream parse error', err); } };
   ws.onclose = () => { status.classList.add('offline'); label.innerText = 'Reconnecting'; setTimeout(connect, 3000); };

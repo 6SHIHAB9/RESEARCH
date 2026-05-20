@@ -126,6 +126,7 @@ class Agent:
     # Status
     last_action: str     = "wandering"
     last_phrase: str      = ""
+    last_target: str      = ""
     social_status: float  = 0.5   # emergent, 0=outcast 1=leader
     territory_claim: str  = None
     home_group: str       = None
@@ -206,6 +207,8 @@ class Agent:
             "reputation": round(self.reputation, 2),
             "last_action": self.last_action,
             "last_phrase": self.last_phrase,
+            "phrase": self.last_phrase,
+            "target": self.last_target,
             "action_history": self.action_history[-6:],
             "traits": self.traits,
             "backstory": self.backstory,

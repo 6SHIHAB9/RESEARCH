@@ -52,5 +52,5 @@ CRAFTING_RECIPES = {
 }
 
 # ── Limits ────────────────────────────────────────────────────────────────────
-MAX_EVENTS       = 80
+MAX_EVENTS       = 500
 MAX_AGENT_MEMORY = 30

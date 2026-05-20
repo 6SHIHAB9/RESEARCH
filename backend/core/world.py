@@ -272,7 +272,7 @@ class World:
     # ── Event log ─────────────────────────────────────────────────────────────
 
     def log(self, event_type: str, data: dict):
-        event = {**data, "tick": self.tick_number, "type": event_type}
+        event = {**data, "tick": self.tick_number, "type": event_type, "ts": time.time()}
         self.events.append(event)
         self.society.remember_event(self, event)
         if len(self.events) > MAX_EVENTS:
@@ -313,7 +313,7 @@ class World:
             "agents": [a.to_dict() for a in self.agents.values() if a.alive],
             "resources": [r.to_dict() for r in self.resources],
             "landmarks": self.landmarks,
-            "events": self.events[-50:],
+            "events": self.events[-200:],
             "economy": self.market.to_dict(),
             "metrics": dict(sorted(self.metrics.items())),
             "weather": self.weather.to_dict(),

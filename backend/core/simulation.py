@@ -242,6 +242,10 @@ def apply_results(world: World, results: list):
 
         if phrase and action == "speak" and success:
             agent.last_phrase = phrase
+            agent.last_target = target.name if target else ""
+        elif action in {"wander", "forage", "rest", "craft", "build", "claim"}:
+            agent.last_phrase = ""
+            agent.last_target = ""
 
         if success and isinstance(rel_updates, dict):
             for rel_target_id, updates in rel_updates.items():
@@ -272,7 +276,7 @@ def apply_results(world: World, results: list):
             if original_action in {"trade", "give", "craft", "build", "forage", "claim"}:
                 action = "observe" if target else "wander"
 
-        agent.last_action = action
+        agent.last_action = original_action if success else action
         agent.record_action(world.tick_number, original_action, success)
         world.increment_metric(f"action_{original_action}")
         if success:
